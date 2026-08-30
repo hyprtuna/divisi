@@ -39,6 +39,11 @@ signal bar(index: int)
 ## Emitted when a scheduled stinger actually starts.
 signal stinger_started
 
+## Emitted when the section that was playing reached the end of its stems and stopped, which
+## only happens when they are not set to loop. divisi stops rather than sitting on a clock
+## that will never advance again.
+signal playback_finished(section_name: StringName)
+
 ## The sections this player can play, looked up by [member DivisiSection.section_name].
 @export var sections: Array[DivisiSection] = []
 
@@ -56,7 +61,8 @@ signal stinger_started
 ## Length of a transition crossfade. 0.0 is a hard cut at the boundary.
 @export_range(0.0, 10.0, 0.01, "or_greater", "suffix:s") var transition_seconds: float = 0.5
 
-## Level of the music, before the crossfade and the stinger duck are applied on top.
+## Level of the music, before the crossfade and the stinger duck are applied on top. Stingers
+## are played at this level too, without the duck.
 @export_range(-60.0, 12.0, 0.01, "suffix:dB") var volume_db: float = 0.0:
 	set(value):
 		volume_db = value
@@ -115,16 +121,29 @@ var _stinger_at: float = 0.0
 var _stinger_pending: bool = false
 # Duck applied to the music while a stinger plays. 0.0 when nothing is ducking.
 var _duck_db: float = 0.0
-var _duck_depth_db: float = 0.0
-var _duck_release: float = 0.25
 var _duck_hold_until: float = 0.0
+var _duck_release_seconds: float = 0.25
+var _duck_release_from_db: float = 0.0
+var _duck_release_elapsed: float = 0.0
 var _ducking: bool = false
+var _duck_releasing: bool = false
+# Requested at schedule time and read at fire time. Kept apart from the active duck above: a
+# second stinger scheduled with no duck used to overwrite the depth of a duck that was already
+# releasing, which left the release rate at zero and the music permanently quiet.
+var _pending_duck_db: float = 0.0
+var _pending_duck_release: float = 0.25
+# The layers of each slot's section, in mix order, cached so that writing intensity every
+# frame does not rebuild the array every frame.
+var _active_mixed: Array[DivisiLayer] = []
+var _idle_mixed: Array[DivisiLayer] = []
 
 
 func _ready() -> void:
 	_music_a = _make_player(&"DivisiMusicA")
 	_music_b = _make_player(&"DivisiMusicB")
 	_stinger_player = _make_player(&"DivisiStinger")
+	_music_a.finished.connect(_on_music_finished.bind(_music_a))
+	_music_b.finished.connect(_on_music_finished.bind(_music_b))
 	_active = _music_a
 	_idle = _music_b
 
@@ -161,11 +180,25 @@ func _process(delta: float) -> void:
 ## top. Returns false when the section cannot be found. Use [method transition_to] to move
 ## between sections while the music is running; this one cuts.
 func play(section_name: StringName = &"") -> bool:
+	if _music_a == null:
+		push_error("divisi: play() was called before the player entered the tree.")
+		return false
 	var section := find_section(section_name) if section_name != &"" else current_section
 	if section == null and section_name == &"" and not sections.is_empty():
 		section = sections[0]
 	if section == null:
 		push_error("divisi: no section named '%s'." % section_name)
+		return false
+	if section.mixed_layers().is_empty():
+		push_error(
+			(
+				(
+					"divisi: section '%s' has no layer with a stream, so there would be nothing to "
+					+ "mix and no playback position to read musical time from."
+				)
+				% section.section_name
+			)
+		)
 		return false
 
 	_cancel_pending()
@@ -174,7 +207,9 @@ func play(section_name: StringName = &"") -> bool:
 	_idle = _music_b
 	_load_into(_active, section, 0.0)
 	_active_section = section
+	_active_mixed = section.mixed_layers()
 	_idle_section = null
+	_idle_mixed = []
 	current_section = section
 
 	clock.player = _active
@@ -220,8 +255,22 @@ func transition_to(
 
 	pending_section = section
 	_pending_at = clock.next_boundary(quantize)
-	# rebase() announces a downbeat at the boundary, so the landing bar is always the next one.
-	transition_started.emit(current_section.section_name, section.section_name, clock.bar_index + 1)
+	transition_started.emit(
+		current_section.section_name, section.section_name, clock.landing_bar(_pending_at)
+	)
+	return true
+
+
+## Drops a scheduled transition, leaving the section that is playing alone. Returns false when
+## nothing was scheduled.
+##
+## This is the way to change your mind. Calling [method transition_to] with the section already
+## playing does not cancel: while something is pending it is accepted, and schedules a
+## crossfade from the section to itself.
+func cancel_transition() -> bool:
+	if pending_section == null:
+		return false
+	pending_section = null
 	return true
 
 
@@ -247,8 +296,8 @@ func play_stinger(
 	_stinger_stream = stream
 	_stinger_at = clock.next_boundary(quantize)
 	_stinger_pending = true
-	_duck_depth_db = minf(0.0, duck_db)
-	_duck_release = maxf(0.0, release_seconds)
+	_pending_duck_db = minf(0.0, duck_db)
+	_pending_duck_release = maxf(0.0, release_seconds)
 	return true
 
 
@@ -266,7 +315,7 @@ func layer_gains() -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
 	if _active_section == null:
 		return out
-	for layer in _active_section.mixed_layers():
+	for layer in _active_mixed:
 		out.append({"name": layer.layer_name, "db": layer.gain_db(intensity)})
 	return out
 
@@ -288,6 +337,9 @@ func capture_state() -> Dictionary:
 func restore_state(state: Dictionary) -> bool:
 	if state.is_empty() or not state.has("section"):
 		return false
+	if _music_a == null:
+		push_error("divisi: restore_state() was called before the player entered the tree.")
+		return false
 	var section := find_section(StringName(state["section"]))
 	if section == null:
 		push_warning(
@@ -305,15 +357,28 @@ func restore_state(state: Dictionary) -> bool:
 	_idle = _music_b
 
 	clock.player = null
-	clock.from_dict(state.get("clock", {}))
+	var saved_clock: Dictionary = state.get("clock", {})
+	if not saved_clock.has("bpm"):
+		clock.bpm = section.bpm
+	if not saved_clock.has("beats_per_bar"):
+		clock.beats_per_bar = section.beats_per_bar
+	clock.from_dict(saved_clock)
+
 	var loop_length := section.loop_length()
-	var phase := 0.0
+	# Where inside the stems playback was, which the save records. It is not the position
+	# modulo the loop length: after a transition the stems did not start at position 0, and
+	# restoring as though they had put the music a beat out of phase with the beat grid.
+	var phase := float(saved_clock.get("source_position", 0.0))
 	if loop_length > 0.0:
-		phase = fposmod(clock.position, loop_length)
+		phase = fposmod(phase, loop_length)
+	else:
+		phase = clampf(phase, 0.0, maxf(0.0, section.loop_length()))
 
 	_load_into(_active, section, phase)
 	_active_section = section
+	_active_mixed = section.mixed_layers()
 	_idle_section = null
+	_idle_mixed = []
 	current_section = section
 	clock.player = _active
 	clock.resync_source(phase, loop_length)
@@ -329,6 +394,30 @@ func _make_player(node_name: StringName) -> AudioStreamPlayer:
 	p.bus = bus
 	add_child(p)
 	return p
+
+
+# A section whose stems are not set to loop runs out. Without this the player would sit there
+# with playing still true, the clock frozen at the last position it read, and any scheduled
+# transition waiting for a boundary that can never arrive: a silent hang, and forgetting to
+# tick Loop in the import dock is an easy way to reach it.
+func _on_music_finished(from_player: AudioStreamPlayer) -> void:
+	if not playing or from_player != _active:
+		return
+	var finished_name := &""
+	if current_section != null:
+		finished_name = current_section.section_name
+		if not current_section.loops():
+			push_warning(
+				(
+					(
+						"divisi: section '%s' reached the end of its stems and stopped. Set Loop on "
+						+ "the streams in the import dock if it was meant to keep playing."
+					)
+					% finished_name
+				)
+			)
+	stop()
+	playback_finished.emit(finished_name)
 
 
 func _load_into(player: AudioStreamPlayer, section: DivisiSection, from_position: float) -> void:
@@ -372,11 +461,22 @@ func _fire_transition() -> void:
 	if loop_length > 0.0:
 		overshoot = fposmod(overshoot, loop_length)
 
+	# Starting a second crossfade while one is still running used to snap both players to the
+	# endpoints of the new fade, which stepped the surviving section up and the other one to
+	# silence in a single frame: two clicks. Beginning the new fade at the point where its
+	# curves already hold the current levels keeps both sides continuous, because
+	# cos(t) and sin(1 - t) are the same number.
+	var carry := 0.0
+	if _fading and _fade_seconds > 0.0:
+		carry = 1.0 - clampf(_fade_elapsed / _fade_seconds, 0.0, 1.0)
+
 	var outgoing := _active
 	var incoming := _idle
 	_load_into(incoming, section, overshoot)
 	_idle_section = _active_section
+	_idle_mixed = _active_mixed
 	_active_section = section
+	_active_mixed = section.mixed_layers()
 	_active = incoming
 	_idle = outgoing
 	current_section = section
@@ -385,7 +485,7 @@ func _fire_transition() -> void:
 	clock.rebase(_pending_at, overshoot, loop_length, section.bpm, section.beats_per_bar)
 
 	_fade_seconds = maxf(0.0, transition_seconds)
-	_fade_elapsed = 0.0
+	_fade_elapsed = carry * _fade_seconds
 	_fading = true
 	_apply_volumes()
 	if _fade_seconds <= 0.0:
@@ -400,9 +500,11 @@ func _fire_stinger() -> void:
 	_stinger_player.stream = _stinger_stream
 	_stinger_player.volume_db = volume_db
 	_stinger_player.play(minf(overshoot, maxf(0.0, length - 0.001)))
-	if _duck_depth_db < 0.0:
+	if _pending_duck_db < 0.0:
 		_ducking = true
-		_duck_db = _duck_depth_db
+		_duck_releasing = false
+		_duck_db = _pending_duck_db
+		_duck_release_seconds = _pending_duck_release
 		_duck_hold_until = clock.position + maxf(0.0, length - overshoot)
 		_apply_volumes()
 	stinger_started.emit()
@@ -423,22 +525,33 @@ func _end_fade() -> void:
 		_idle.stop()
 		_idle.stream = null
 	_idle_section = null
+	_idle_mixed = []
 	_apply_volumes()
 
 
 func _advance_duck(delta: float) -> void:
 	if not _ducking:
 		return
-	if clock.position < _duck_hold_until:
-		_duck_db = _duck_depth_db
-	elif _duck_release <= 0.0:
+	if not _duck_releasing:
+		if clock.position < _duck_hold_until:
+			return
+		_duck_releasing = true
+		_duck_release_from_db = _duck_db
+		_duck_release_elapsed = 0.0
+
+	# A ramp over elapsed time from the level the duck was actually at, rather than a rate
+	# derived from a depth that a later call could have changed underneath it. This always
+	# reaches zero and always clears _ducking.
+	if _duck_release_seconds <= 0.0:
+		_duck_db = 0.0
+	else:
+		_duck_release_elapsed += delta
+		var t := clampf(_duck_release_elapsed / _duck_release_seconds, 0.0, 1.0)
+		_duck_db = lerpf(_duck_release_from_db, 0.0, t)
+	if is_zero_approx(_duck_db) or _duck_release_seconds <= 0.0:
 		_duck_db = 0.0
 		_ducking = false
-	else:
-		_duck_db = minf(0.0, _duck_db + (-_duck_depth_db) * delta / _duck_release)
-		if _duck_db >= 0.0:
-			_duck_db = 0.0
-			_ducking = false
+		_duck_releasing = false
 	_apply_volumes()
 
 
@@ -459,18 +572,19 @@ func _apply_volumes() -> void:
 
 
 func _apply_intensity() -> void:
-	_apply_stream_intensity(_active, _active_section)
+	_apply_stream_intensity(_active, _active_mixed)
 	if _fading:
-		_apply_stream_intensity(_idle, _idle_section)
+		_apply_stream_intensity(_idle, _idle_mixed)
 
 
-func _apply_stream_intensity(player: AudioStreamPlayer, section: DivisiSection) -> void:
-	if player == null or section == null:
+# Takes the layer list rather than the section: intensity is expected to be written every
+# frame, and rebuilding the filtered array on every write allocated once a frame per player.
+func _apply_stream_intensity(player: AudioStreamPlayer, mixed: Array[DivisiLayer]) -> void:
+	if player == null or mixed.is_empty():
 		return
 	var sync := player.stream as AudioStreamSynchronized
 	if sync == null:
 		return
-	var mixed := section.mixed_layers()
 	for i in mini(mixed.size(), sync.stream_count):
 		sync.set_sync_stream_volume(i, mixed[i].gain_db(intensity))
 

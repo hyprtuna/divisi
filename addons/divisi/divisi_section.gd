@@ -25,12 +25,26 @@ extends Resource
 
 
 ## Length of one loop of this section in seconds, taken from the first layer that has a
-## stream. 0.0 when the section has no usable layer.
+## stream. 0.0 when the section has no usable layer, and 0.0 when that stream is not set to
+## loop: a stream that runs out is not a loop, and telling the clock otherwise makes it wait
+## forever for a wrap that never comes.
+##
+## [method AudioStream.has_loop] is only on the concrete stream types, not on [AudioStream]
+## itself, so it is called through [method Object.has_method]. Checked on 4.4.1 and 4.7.2:
+## present on [AudioStreamOggVorbis] and [AudioStreamWAV], absent on [AudioStreamSynchronized].
 func loop_length() -> float:
-	for layer in layers:
-		if layer != null and layer.stream != null:
-			return layer.stream.get_length()
-	return 0.0
+	var mixed := mixed_layers()
+	if mixed.is_empty():
+		return 0.0
+	var stream := mixed[0].stream
+	if stream.has_method("has_loop") and not stream.has_loop():
+		return 0.0
+	return stream.get_length()
+
+
+## Whether this section's stems loop. A section that does not loop plays once and stops.
+func loops() -> bool:
+	return loop_length() > 0.0
 
 
 ## Builds a fresh [AudioStreamSynchronized] holding every layer, with each layer's volume set

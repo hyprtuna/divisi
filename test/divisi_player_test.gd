@@ -126,7 +126,7 @@ func test_the_clock_follows_the_audio_device_and_not_the_frame_rate(timeout := 2
 	# the runner rather than divisi. Measured standalone on this driver the departure is
 	# bounded and does not trend, within about 56 ms over 8 seconds in both directions, but
 	# that number is a property of the dummy driver. The wall clock claim needs real hardware
-	# and is checked by hand; see the drift counter in the demo.
+	# and is checked by hand against the demo's readout.
 	_player.play(&"explore")
 	await get_tree().create_timer(6.0).timeout
 	var device := DivisiClock.compensated_position(_player.get_node(^"DivisiMusicA"))
@@ -145,3 +145,56 @@ func test_a_stalled_frame_does_not_move_the_system_clock_offset(timeout := 20000
 	while Time.get_ticks_usec() < until:
 		pass
 	assert_float(_player.clock.system_clock_offset_seconds).is_equal_approx(before, 0.001)
+
+
+func _one_shot_section() -> DivisiSection:
+	# A section whose stem does not loop. The stinger is the only non-looping stream in the
+	# demo, which is exactly the mistake this guards: a stem imported with Loop unticked.
+	var layer := DivisiLayer.new()
+	layer.layer_name = &"oneshot"
+	layer.stream = STINGER
+	var section := DivisiSection.new()
+	section.section_name = &"oneshot"
+	section.bpm = 120.0
+	section.beats_per_bar = 4
+	section.layers = [layer] as Array[DivisiLayer]
+	return section
+
+
+func test_a_section_whose_stems_do_not_loop_reports_no_loop_length() -> void:
+	# Telling the clock a length for a stream that will not wrap makes it wait forever for a
+	# wrap that never comes.
+	var section := _one_shot_section()
+	assert_float(section.loop_length()).is_equal_approx(0.0, 0.0001)
+	assert_bool(section.loops()).is_false()
+	assert_bool(EXPLORE.loops()).is_true()
+
+
+func test_a_section_that_runs_out_stops_instead_of_freezing(timeout := 15000) -> void:
+	# Without this the player sat with playing still true, the clock frozen at the last
+	# position it read, and any scheduled transition waiting on a boundary that could never
+	# arrive. A silent hang is the worst way to tell somebody they forgot to tick Loop.
+	var section := _one_shot_section()
+	_player.sections = [section] as Array[DivisiSection]
+	var finished: Array[StringName] = []
+	_player.playback_finished.connect(func(n: StringName) -> void: finished.append(n))
+	assert_bool(_player.play(&"oneshot")).is_true()
+	await get_tree().create_timer(2.5).timeout
+	assert_bool(_player.playing).is_false()
+	assert_array(finished).is_equal([&"oneshot"] as Array[StringName])
+
+
+func test_a_section_with_no_usable_layer_is_refused() -> void:
+	# It would build a synchronized stream with no sub streams, whose playback position stays
+	# at zero, so play() would report success and musical time would never move.
+	var empty := DivisiSection.new()
+	empty.section_name = &"empty"
+	_player.sections = [empty] as Array[DivisiSection]
+	assert_bool(_player.play(&"empty")).is_false()
+	assert_bool(_player.playing).is_false()
+
+
+func test_play_before_the_player_is_in_the_tree_is_refused() -> void:
+	var loose: DivisiPlayer = auto_free(DivisiPlayer.new())
+	loose.sections = [EXPLORE] as Array[DivisiSection]
+	assert_bool(loose.play(&"explore")).is_false()
