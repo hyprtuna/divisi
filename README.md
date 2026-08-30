@@ -13,35 +13,37 @@ layer volumes.
 
 ## The demo
 
+![The divisi demo: a threat slider morphing four stems, then a bar quantized transition to a second section](docs/demo.gif)
+
+The clip is the first fifteen seconds, silent because it is a GIF. The same
+thirty nine seconds [with sound](docs/demo.webm) runs through everything below.
+
 The repository is itself a Godot project: clone it, open it in Godot 4.4 or
 newer, press play. The demo screen shows, in this order:
 
 1. A "threat" slider morphing four stems in and out, in phase, with no clicks.
 2. A button that jumps to a second section on the next bar line, landing on
    the downbeat.
-3. A UI element pulsing on the `beat` signal, next to a live readout of how far
-   the audio clock and the system clock have run apart.
+3. A UI element pulsing on the `beat` signal, next to a live readout of the
+   section, the bar and beat, and every layer's gain.
 4. A stinger fired on the next beat over the running mix.
 5. A button that changes scene while the music keeps playing, bar position
    intact.
 
-The `vs system` line is the thing to read, and it is worth reading carefully.
-divisi takes musical time from the audio device, so its beat and bar counts
-are always exactly where the music is: on a ten minute run measured here, beat
-480 landed at position 240.000 s at 120 BPM with nothing skipped. That line
-shows the gap between that clock and the wall clock a `_position += delta`
-implementation would have counted instead. It is not divisi's error; it is the
-difference between the two answers, and only one of them matches what the
-player hears.
+![The divisi readout: section, bar and beat, and a live gain meter per layer](docs/readout.png)
 
-How large the gap gets is a property of your sound hardware. On the Linux box
-this was measured on, PulseAudio over PipeWire, it held between about -19 and
--33 ms across ten minutes with no trend. Godot's own
+The `bar:beat` line in the readout is the thing to watch. It is read from the
+audio device, not from frame deltas, so it is always exactly where the music
+is and it stays there. Measured over a ten minute run on real hardware at
+120 BPM, beat 1200 landed at position 600.04 s with nothing skipped.
+
+That is the whole argument for reading the device. Godot's own
 [audio sync tutorial](https://docs.godotengine.org/en/stable/tutorials/audio/sync_with_audio.html)
-warns that on other hardware it does not stay put, because "the sound hardware
-clock is never exactly in sync with the system clock, [so] the timing
-information will slowly drift away". divisi is unaffected either way, because
-it never reads the system clock for musical time.
+warns that a clock built by accumulating `delta` will not hold, because "the
+sound hardware clock is never exactly in sync with the system clock, [so] the
+timing information will slowly drift away". `DivisiDebug` can show that gap
+directly, as an opt-in line, but it is a diagnostic about two clocks rather
+than a health reading, so it is off by default.
 
 ## Install
 
@@ -124,7 +126,8 @@ unambiguous about which properties exist and what they do.
 - **`DivisiLayer`**: one vertical layer of a section, a stem and how loud it
   is at a given intensity.
 - **`DivisiDebug`**: an on-screen readout of a `DivisiPlayer`, section, bar
-  and beat, per-layer gains, and the audio versus system clock gap.
+  and beat, and per-layer gains, with the audio versus system clock gap
+  available as an opt-in line.
 - **`DivisiState`** (autoload): carries music state across a scene change.
 - **`DivisiQuantize`**: the musical boundaries divisi can schedule against,
   `NOW`, `NEXT_BEAT`, `NEXT_BAR`.
