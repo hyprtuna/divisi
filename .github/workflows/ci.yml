@@ -1,0 +1,145 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Everything that must hold before code reaches main runs here, once per
+  # Godot version in the support matrix. A matrix job's own status check
+  # context is "test (4.4)" / "test (4.7)", never the bare job name, so this
+  # cannot be the job the branch ruleset points at. The "gate" job below
+  # exists only to give the ruleset the single fixed name "gate" to require.
+  test:
+    name: test (${{ matrix.godot-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # gdUnit4 v6.x requires Godot 4.5 or newer (it dropped support for
+        # 4.4 when it moved to the 4.5 baseline), while the last v5.x release
+        # is the newest one that still supports 4.4. There is no single
+        # gdUnit4 release that covers both ends of this addon's own support
+        # matrix, so each leg pins the gdUnit4 release that actually runs on
+        # its Godot version. See the compatibility table in the gdUnit4 repo.
+        include:
+          - godot-version: '4.4'
+            gdunit-version: '5.1.1'
+          - godot-version: '4.7'
+            gdunit-version: '6.2.1'
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: chickensoft-games/setup-godot@v2
+        with:
+          version: ${{ matrix.godot-version }}
+          # divisi is pure GDScript. The .NET-enabled build is this action's
+          # default and would pull in a dotnet runtime this addon never uses.
+          use-dotnet: false
+
+      - name: godot is on PATH
+        run: godot --version
+
+      # gdtoolkit's major version has to match Godot's major version or it
+      # rejects valid 4.x syntax as a parse error; the minor version does not
+      # need to match. Pinned to an exact release so a new gdtoolkit version
+      # cannot silently start reformatting the whole addon on an unrelated PR.
+      - name: install gdtoolkit
+        run: pipx install "gdtoolkit==4.5.0"
+
+      - name: gdformat --check
+        run: gdformat --check $(git ls-files '*.gd')
+
+      - name: gdlint
+        run: gdlint $(git ls-files '*.gd')
+
+      # gdUnit4 is a dev dependency: fetched here, never vendored into the
+      # repository. Only addons/gdUnit4 is pulled out of the tagged source
+      # tarball, straight into the project's own gitignored addons/ folder,
+      # at the version this Godot leg actually supports (see the matrix
+      # comment above).
+      - name: install gdUnit4
+        run: |
+          v="${{ matrix.gdunit-version }}"
+          curl -fsSL "https://github.com/MikeSchulze/gdUnit4/archive/refs/tags/v${v}.tar.gz" -o /tmp/gdunit4.tar.gz
+          mkdir -p addons/gdUnit4
+          tar xzf /tmp/gdunit4.tar.gz -C addons/gdUnit4 --strip-components=3 "gdUnit4-${v}/addons/gdUnit4"
+          chmod +x addons/gdUnit4/runtest.sh
+
+      # A project's resources must be imported by the editor at least once
+      # before a headless run can see them; skipping this step is the usual
+      # cause of a gdUnit4 CI run that silently reports zero tests instead of
+      # running any.
+      - name: import project resources
+        run: godot --headless --path . --import --quit-after 1
+
+      # runtest.sh's own exit codes: 0 all tests passed, 100 the run ended in
+      # test failures, 101 the run ended in warnings only. 100 and 101 are
+      # both non-zero, so a failing or warning run fails this step without
+      # any extra exit-code handling here. Documented at:
+      # https://godot-gdunit-labs.github.io/gdUnit4/latest/advanced_testing/cmd/
+      - name: gdUnit4 headless tests
+        run: |
+          export GODOT_BIN="$(command -v godot)"
+          ./addons/gdUnit4/runtest.sh -a test
+
+      # plugin.cfg is the one file Godot itself reads to enable the addon, so
+      # its absence or a malformed version is worth catching on every PR
+      # rather than at packaging time in the release workflow.
+      - name: addon structure
+        run: |
+          test -f addons/divisi/plugin.cfg || { echo "addons/divisi/plugin.cfg is missing"; exit 1; }
+          test -f LICENSE || { echo "LICENSE is missing at the repo root"; exit 1; }
+          version=$(grep -m1 -oP '(?<=^version=")[^"]+(?=")' addons/divisi/plugin.cfg || true)
+          if [ -z "$version" ]; then
+            echo "addons/divisi/plugin.cfg has no version=\"...\" line"
+            exit 1
+          fi
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "addons/divisi/plugin.cfg version '$version' is not a plain X.Y.Z"
+            exit 1
+          fi
+
+      - name: no em or en dashes
+        run: |
+          if git grep -nP '\x{2014}|\x{2013}' -- .; then
+            echo "Em and en dashes are not used in this repository. Use a plain hyphen."
+            exit 1
+          fi
+
+      # The release job depends on this script; a tag whose CHANGELOG section
+      # is missing must fail here, on the PR, not at publish time. The script
+      # has its own tests, and the real CHANGELOG's top section must extract.
+      - name: release notes script
+        run: |
+          .github/scripts/release-notes_test.sh
+          top="$(grep -m1 -oE '^## \[[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]*)?\]' CHANGELOG.md | sed -e 's/^## \[//' -e 's/\]$//')"
+          .github/scripts/release-notes.sh "v$top" CHANGELOG.md >/dev/null
+
+  # The single check the branch ruleset requires. It needs the whole matrix
+  # and fails on anything but a clean success across every leg: "if: always()"
+  # keeps this job running even when a matrix leg failed (the default would
+  # skip it), and comparing needs.test.result to the literal string "success"
+  # means a cancelled or skipped leg fails the gate too, not just a failed one.
+  gate:
+    name: gate
+    needs: test
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: matrix result
+        run: |
+          result="${{ needs.test.result }}"
+          if [ "$result" != "success" ]; then
+            echo "test matrix result was '$result', want 'success'"
+            exit 1
+          fi

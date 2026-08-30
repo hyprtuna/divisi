@@ -1,0 +1,82 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  # The same gate that guards main guards a release. A tag that cannot pass
+  # CI, on every Godot version the addon claims to support, is not published.
+  gate:
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: gate
+    runs-on: ubuntu-latest
+    # Publishing waits for a human. The environment carries a required
+    # reviewer, so this job does not start until that review is given.
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      # A tag naming a version that plugin.cfg does not agree with is not a
+      # release, it is two different numbers. Caught here, loudly, before
+      # anything is packaged, rather than shipping a zip that lies about its
+      # own version.
+      - name: tag matches plugin.cfg
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          want="${tag#v}"
+          got=$(grep -m1 -oP '(?<=^version=")[^"]+(?=")' addons/divisi/plugin.cfg || true)
+          if [ -z "$got" ]; then
+            echo "addons/divisi/plugin.cfg has no version=\"...\" line"
+            exit 1
+          fi
+          if [ "$got" != "$want" ]; then
+            echo "tag $tag names version $want, but addons/divisi/plugin.cfg has version $got"
+            exit 1
+          fi
+          echo "version=$want" >> "$GITHUB_ENV"
+
+      # The zip ships only the addon, not the demo or the test suite, and the
+      # addons/divisi/... prefix is kept inside it so a user can unzip it
+      # straight into their own project's root and end up with
+      # addons/divisi/ in the right place.
+      - name: package addon
+        run: |
+          added_license=0
+          if [ ! -f addons/divisi/LICENSE ]; then
+            cp LICENSE addons/divisi/LICENSE
+            added_license=1
+          fi
+          zip -r "divisi-v${version}.zip" addons/divisi
+          if [ "$added_license" -eq 1 ]; then
+            rm addons/divisi/LICENSE
+          fi
+          sha256sum "divisi-v${version}.zip" > "divisi-v${version}.zip.sha256"
+
+      # Only a zip that has actually been built with the right contents gets
+      # published. This is not a full extraction test, just a cheap sanity
+      # check that the prefix and the manifest both made it into the archive.
+      - name: verify zip contents
+        run: |
+          unzip -l "divisi-v${version}.zip" | grep -q "addons/divisi/plugin.cfg"
+
+      # The release body is the CHANGELOG section for this version, and a tag
+      # without one is not published: GitHub's generated notes would list
+      # pull request titles and say nothing about the addon.
+      - name: release notes
+        run: .github/scripts/release-notes.sh "${GITHUB_REF_NAME}" CHANGELOG.md > release-notes.md
+
+      - name: publish
+        uses: softprops/action-gh-release@v3
+        with:
+          body_path: release-notes.md
+          files: |
+            divisi-v${{ env.version }}.zip
+            divisi-v${{ env.version }}.zip.sha256
