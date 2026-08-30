@@ -42,7 +42,7 @@ signal bar(index: int)
 ## below this is inaudible in practice and is treated as silence.
 const SILENCE_DB := -80.0
 
-## A frame that stalls long enough to miss more than this many beats does not emit all of
+## A frame that stalls long enough to miss this many beats or more does not emit all of
 ## them. Emitting a burst of hundreds of beat handlers after a window drag or a level load is
 ## worse than admitting the gap, so the skipped ones are counted in [member skipped_beats]
 ## and only the newest beat is emitted.
@@ -77,7 +77,10 @@ var bar_index: int = -1
 ## [member beats_per_bar] - 1.
 var beat_in_bar: int = -1
 
-## Beats that a stalled frame skipped over, see [constant MAX_CATCH_UP_BEATS]. Should stay 0.
+## Beats that a stalled frame skipped over rather than emitting, see
+## [constant MAX_CATCH_UP_BEATS]. In steady play it stays 0. It is expected to move after a
+## level load, and after the scene tree is unpaused, because the audio server keeps mixing
+## while [method Node._process] is not running.
 var skipped_beats: int = 0
 
 ## Whether [method start] has been called and [method stop] has not.
@@ -115,6 +118,17 @@ var system_clock_offset_seconds: float:
 		var wall := float(_last_tick_usec - _wall_start_usec) / 1000000.0
 		return (position - _wall_start_position) - wall
 
+## Where inside the current stream playback is, in seconds, counting from the sample
+## [method start] or [method rebase] put on [member position]'s timeline. This is what a
+## restore has to hand back to [method resync_source]: after a transition it is not
+## [member position] modulo the loop length, because the stream did not start at position 0.
+var source_position: float:
+	get:
+		var elapsed := position - _origin
+		if _loop_length > 0.0:
+			return fposmod(elapsed, _loop_length)
+		return maxf(0.0, elapsed)
+
 ## Seconds in one beat at the current tempo.
 var beat_seconds: float:
 	get:
@@ -130,6 +144,9 @@ var bar_seconds: float:
 var _origin: float = 0.0
 # Beat index of the beat that sits exactly on _origin.
 var _origin_beat: int = 0
+# Which beat of the bar that beat is. Zero after start() and rebase(), which both anchor on a
+# downbeat; resync_source() can land anywhere.
+var _origin_beat_in_bar: int = 0
 # Raw playback position last seen, used to notice a loop wrap.
 var _last_raw: float = 0.0
 # Completed loops of the current source.
@@ -164,6 +181,7 @@ func start(loop_length: float = 0.0) -> void:
 	skipped_beats = 0
 	_origin = 0.0
 	_origin_beat = 0
+	_origin_beat_in_bar = 0
 	_last_raw = 0.0
 	_wraps = 0
 	_loop_length = maxf(0.0, loop_length)
@@ -183,9 +201,15 @@ func stop() -> void:
 ## boundary and the frame that noticed it.
 ##
 ## The incoming stems begin at their own downbeat, so the bar grid re-anchors to
-## [param at_position] and a [signal bar] is emitted there. The beat that sits on the boundary
-## has usually already been emitted by the tick that ran immediately before this call, and it
-## is not emitted twice.
+## [param at_position] and a [signal bar] is emitted there, once. The beat that sits on the
+## boundary has usually already been emitted by the tick that ran immediately before this
+## call, and it is not emitted twice.
+##
+## [member beat_index] is never moved backwards. A frame long enough to overshoot the boundary
+## by more than one beat has already emitted beats past it, and rewinding the counter so they
+## could be emitted again fired every beat handler twice with a decreasing index.
+##
+## Leaves the clock running, whether or not it was running before.
 func rebase(
 	at_position: float,
 	source_position: float,
@@ -195,41 +219,51 @@ func rebase(
 ) -> void:
 	# Read against the outgoing grid, before the tempo changes under it.
 	var boundary_beat := beat_at(at_position)
+	# Whether the tick just before this call announced the boundary as a downbeat, which is
+	# what a NEXT_BAR transition does. If it did, announcing it again is a duplicate.
+	var downbeat_already_out := beat_index == boundary_beat and beat_in_bar == 0
+
 	if new_bpm > 0.0:
 		bpm = new_bpm
 	if new_beats_per_bar > 0:
 		beats_per_bar = new_beats_per_bar
 	position = maxf(position, at_position + source_position)
 	_origin = at_position
+	_origin_beat = boundary_beat
+	_origin_beat_in_bar = 0
 	_last_raw = source_position
 	_wraps = 0
 	_loop_length = maxf(0.0, loop_length)
 	running = true
 
-	if beat_index >= boundary_beat:
-		# The boundary beat is already out. Keep it, and only announce the new downbeat if
-		# that beat was not itself a downbeat, which is the NEXT_BAR case.
-		_origin_beat = boundary_beat
-		beat_index = boundary_beat
-		if beat_in_bar != 0:
-			beat_in_bar = 0
-			bar_index += 1
-			bar.emit(bar_index)
-	else:
+	if beat_index < boundary_beat:
 		# Nothing has been emitted at or past the boundary, so the next tick announces it.
-		_origin_beat = beat_index + 1
-		beat_index = _origin_beat - 1
+		beat_index = boundary_beat - 1
 		beat_in_bar = beats_per_bar - 1
+		return
+
+	beat_in_bar = (beat_index - _origin_beat) % beats_per_bar
+	if not downbeat_already_out:
+		bar_index += 1
+		bar.emit(bar_index)
 
 
 ## Points the clock at a stream that is already playing at [param source_position], without
 ## moving [member position] or any index. Used when restoring saved state into a fresh scene:
 ## [method from_dict] puts the counts back, then this re-attaches them to the new playback.
-## [param source_position] must be the phase within the loop that playback was started at, so
-## that the stream's own first sample keeps sitting on a downbeat.
+## [param source_position] must be the position inside the stream that playback was started
+## at, which [method to_dict] records for exactly this purpose.
+##
+## Unlike [method start] and [method rebase], the position this anchors the grid at is not a
+## downbeat: after a transition, a stream's own first sample and the bar line are different
+## beats, and for a loop that is not a whole number of bars they move apart at every wrap. So
+## the beat of the bar that [param source_position] lands on is recorded alongside it, and
+## [method next_boundary] uses it rather than assuming zero.
 func resync_source(source_position: float, loop_length: float) -> void:
+	var beats_in := floori(source_position / beat_seconds)
 	_origin = position - source_position
-	_origin_beat = beat_index - floori(source_position / beat_seconds)
+	_origin_beat = beat_index - beats_in
+	_origin_beat_in_bar = posmod(beat_in_bar - beats_in, beats_per_bar)
 	_last_raw = source_position
 	_wraps = 0
 	_loop_length = maxf(0.0, loop_length)
@@ -247,6 +281,7 @@ func to_dict() -> Dictionary:
 		"bar_index": bar_index,
 		"beat_in_bar": beat_in_bar,
 		"skipped_beats": skipped_beats,
+		"source_position": source_position,
 	}
 
 
@@ -281,9 +316,9 @@ func next_boundary(quantize: DivisiQuantize.Mode) -> float:
 	var beats_since_origin := (position - _origin) / beat_seconds
 	var n := floori(beats_since_origin) + 1
 	if quantize == DivisiQuantize.NEXT_BAR:
-		# _origin always sits on a downbeat: start() begins on one and rebase() re-anchors to
-		# the incoming stream's own first sample, which is one.
-		while n % beats_per_bar != 0:
+		# _origin is a downbeat after start() and rebase(), but not after resync_source(), so
+		# the bar line is counted from the beat of the bar that _origin actually sits on.
+		while (_origin_beat_in_bar + n) % beats_per_bar != 0:
 			n += 1
 	return _origin + float(n) * beat_seconds
 
@@ -292,6 +327,21 @@ func next_boundary(quantize: DivisiQuantize.Mode) -> float:
 ## [constant DivisiQuantize.NOW].
 func time_to_next(quantize: DivisiQuantize.Mode) -> float:
 	return maxf(0.0, next_boundary(quantize) - position)
+
+
+## The bar index the music will be in once a section change lands on [param musical_position].
+##
+## That is the bars crossed between now and the boundary, plus the downbeat that
+## [method rebase] announces when it re-anchors the grid there. A boundary that is already a
+## downbeat on the current grid is not counted twice.
+func landing_bar(musical_position: float) -> int:
+	var boundary_beat := beat_at(musical_position)
+	var bar_started_at := beat_index - beat_in_bar
+	var crossed := (boundary_beat - bar_started_at) / beats_per_bar
+	var lands_on_a_downbeat := (
+		posmod(boundary_beat - _origin_beat + _origin_beat_in_bar, beats_per_bar) == 0
+	)
+	return bar_index + maxi(0, crossed) + (0 if lands_on_a_downbeat else 1)
 
 
 ## The beat index that [param musical_position] falls on, against the current grid.

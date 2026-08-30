@@ -153,10 +153,6 @@ func test_latency_compensation_never_returns_a_negative_time() -> void:
 	assert_float(DivisiClock.compensate(0.001, 0.0, 0.050)).is_equal_approx(0.0, 0.000001)
 
 
-func test_the_system_clock_offset_reads_zero_before_the_clock_starts() -> void:
-	assert_float(_clock.system_clock_offset_seconds).is_equal_approx(0.0, 0.000001)
-
-
 func test_state_round_trips_through_a_dictionary() -> void:
 	_clock.start(16.0)
 	for step in 7:
@@ -203,3 +199,28 @@ func test_resync_puts_a_restored_count_back_on_the_grid() -> void:
 	_clock.advance_to(1.5)
 	assert_int(_clock.beat_index).is_equal(35)
 	assert_float(_clock.position).is_equal_approx(17.5, 0.0001)
+
+
+func test_next_bar_after_a_restore_lands_on_a_real_downbeat() -> void:
+	# A loop that is not a whole number of bars puts the stream's own first sample and the bar
+	# line on different beats. next_boundary used to assume the origin was always a downbeat,
+	# so a NEXT_BAR transition scheduled after a restore landed two beats out.
+	# 5 s at 120 BPM is 10 beats, two and a half bars.
+	(
+		_clock
+		. from_dict(
+			{
+				"bpm": 120.0,
+				"beats_per_bar": 4,
+				"position": 17.0,
+				"beat_index": 34,
+				"bar_index": 8,
+				"beat_in_bar": 2,
+			}
+		)
+	)
+	_clock.resync_source(2.0, 5.0)
+	var boundary := _clock.next_boundary(DivisiQuantize.NEXT_BAR)
+	# The next downbeat after beat 34 with two beats already gone in the bar is beat 36.
+	assert_int(_clock.beat_at(boundary)).is_equal(36)
+	assert_float(boundary).is_equal_approx(18.0, 0.0001)

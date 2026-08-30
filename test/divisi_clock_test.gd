@@ -159,3 +159,45 @@ func test_bpm_cannot_be_zero() -> void:
 	assert_float(_clock.bpm).is_greater(0.0)
 	_clock.beats_per_bar = 0
 	assert_int(_clock.beats_per_bar).is_equal(1)
+
+
+func test_a_long_stall_carries_the_bar_count_with_it() -> void:
+	# The catch up path used to advance beat_index but count bars only by emission, so one
+	# stall left bar_index reading low for the rest of the run.
+	_clock.start()
+	_clock.advance_to(0.0)
+	_clock.advance_to(60.0)
+	assert_int(_clock.beat_index).is_equal(120)
+	assert_int(_clock.bar_index).is_equal(30)
+	assert_int(_clock.beat_in_bar).is_equal(0)
+
+
+func test_a_rebase_after_an_overshoot_never_replays_a_beat() -> void:
+	# A frame long enough to cross the boundary by more than one beat has already emitted the
+	# beats past it. rebase used to pull beat_index back to the boundary, so the next tick
+	# emitted them again, with a decreasing index, on every transition that fired after a
+	# hitch.
+	_clock.start(16.0)
+	_clock.advance_to(0.0)
+	_clock.advance_to(2.6)
+	var before := _beats.duplicate()
+	# The transition was scheduled for the bar line at 2.0; the frame landed at 2.6.
+	_clock.rebase(2.0, 0.6, 16.0, 120.0, 4)
+	_clock.advance_to(0.7)
+	_clock.advance_to(1.2)
+	assert_int(_clock.beat_index).is_greater_equal(before[-1])
+	for i in range(1, _beats.size()):
+		assert_int(_beats[i]).is_greater(_beats[i - 1])
+
+
+func test_a_rebase_after_an_overshoot_still_announces_the_downbeat() -> void:
+	_clock.start(16.0)
+	_clock.advance_to(0.0)
+	_clock.advance_to(2.6)
+	var bars_before := _bars.size()
+	_clock.rebase(2.0, 0.6, 16.0, 120.0, 4)
+	assert_int(_bars.size()).is_equal(bars_before + 1)
+
+
+func test_the_system_clock_offset_reads_zero_before_the_clock_starts() -> void:
+	assert_float(_clock.system_clock_offset_seconds).is_equal_approx(0.0, 0.000001)
