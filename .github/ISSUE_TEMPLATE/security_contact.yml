@@ -1,0 +1,31 @@
+name: Security contact
+description: Fallback when GitHub Security Advisories is unavailable to you
+title: "Security contact request"
+labels: [security]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Prefer the private advisory form:
+        https://github.com/hyprtuna/divisi/security/advisories/new
+
+        Use this template only if that form is not available to you.
+
+        **Do not describe the vulnerability here.** This issue is public.
+        Say only that you have something to report.
+
+  - type: checkboxes
+    id: no-details
+    attributes:
+      label: Confirmation
+      options:
+        - label: I have not included any details of the issue in this report.
+          required: true
+
+  - type: input
+    id: contact
+    attributes:
+      label: How to reach you
+      description: A way to contact you privately.
+    validations:
+      required: true

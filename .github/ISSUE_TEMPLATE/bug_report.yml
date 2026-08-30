@@ -1,0 +1,76 @@
+name: Bug report
+description: Something does not work as documented
+labels: [bug]
+body:
+  - type: dropdown
+    id: godot-version
+    attributes:
+      label: Godot version
+      options:
+        - '4.4'
+        - '4.5'
+        - '4.6'
+        - '4.7'
+        - other (say which, below)
+    validations:
+      required: true
+
+  - type: input
+    id: divisi-version
+    attributes:
+      label: divisi version
+      description: The version= line in addons/divisi/plugin.cfg, or the tag you downloaded.
+      placeholder: 0.1.0
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: Linux, Windows 11, macOS 15, ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected, and what happened instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Minimal reproduction
+      description: >
+        A minimal project or scene that shows the problem, or the exact steps
+        against the demo project. "It glitches sometimes" cannot be fixed;
+        the smallest scene that reliably shows it can be.
+      render: gdscript
+    validations:
+      required: true
+
+  - type: dropdown
+    id: reproduces-without-divisi
+    attributes:
+      label: Does this also happen with a plain AudioStreamSynchronized and no divisi?
+      description: >
+        Build the same layer setup by hand with AudioStreamSynchronized and
+        AudioStreamPlayer, no divisi nodes involved. If it still happens, the
+        bug is most likely in Godot's own audio engine, not in divisi, and is
+        better reported upstream as well.
+      options:
+        - "I tried this: yes, it still happens without divisi"
+        - "I tried this: no, it only happens with divisi"
+        - I have not tried this
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant script or scene setup
+      description: The DivisiPlayer/DivisiLayer/DivisiSection setup involved, if not shown above.
+      render: gdscript
