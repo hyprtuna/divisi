@@ -35,7 +35,9 @@ the scheduling that clock makes possible.
   or immediately, and the incoming stems land in phase on that boundary
   rather than restarting from zero. Crossfades run on divisi's own clock,
   as an equal-power fade between two players, rather than through the
-  engine's own transition table.
+  engine's own transition table. `transition_started` reports the bar the
+  music will actually be in when it lands, and `cancel_transition()` drops a
+  scheduled one.
 
 - **Stingers.** `DivisiPlayer.play_stinger()` schedules a one-shot over the
   running mix on the next beat or bar, with an optional plain level dip on
@@ -48,9 +50,15 @@ the scheduling that clock makes possible.
   The autoload holds a plain dictionary and nothing else, and does nothing
   unless a player asks it to.
 
-- **A debug overlay.** `DivisiDebug` draws the section, bar and beat, the
-  current drift, and every layer's live gain as a small on-screen meter, for
-  a `DivisiPlayer` found automatically or assigned directly.
+- **A debug overlay.** `DivisiDebug` draws the section, bar and beat and
+  every layer's live gain as a small on-screen meter, for a `DivisiPlayer`
+  found automatically or assigned directly. The gap between the audio clock
+  and the system clock is available as an opt-in line.
+
+- **Loud failures instead of quiet ones.** A section whose stems are not set
+  to loop stops and emits `playback_finished` rather than freezing the clock
+  on a boundary that can never arrive, and a section with no usable layer is
+  refused by `play()` rather than reporting success and never advancing.
 
 - **A demo project.** Two sections, four stems each, morphed by a threat
   slider, a bar-quantized transition button, a beat-synced pulse next to the

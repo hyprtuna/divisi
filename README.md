@@ -122,7 +122,8 @@ unambiguous about which properties exist and what they do.
 - **`DivisiPlayer`**: plays adaptive music, layered sections, bar-quantized
   transitions between them, and stingers over the top.
 - **`DivisiSection`**: a named piece of music, a tempo, a time signature and
-  the layers that make it up.
+  the layers that make it up. Its stems must be imported with Loop ticked; a
+  section that runs out stops and says so through `playback_finished`.
 - **`DivisiLayer`**: one vertical layer of a section, a stem and how loud it
   is at a given intensity.
 - **`DivisiDebug`**: an on-screen readout of a `DivisiPlayer`, section, bar
@@ -167,6 +168,8 @@ alternative for a large project.
 | Tempo or key detection | You tell divisi the tempo. |
 | Sidechain compression | The stinger duck is a plain level dip on the music players; nothing analyses the stinger's envelope. |
 | An editor main-screen panel in v0.1 | Sections and layers are inspector resources. |
+| Overlapping crossfades | There are two music players, so a transition scheduled while another crossfade is still running replaces the oldest section rather than layering a third. The levels stay continuous, but keep `transition_seconds` shorter than the gap between transitions. |
+| Music that keeps counting while the scene tree is paused | `_process` stops and the audio server does not, so on unpause the clock jumps forward and reports the gap in `skipped_beats`. Pause the music too, or give the player a `process_mode` that survives the pause. |
 | Introducing a new layer mid-track, in phase | The engine starts every sub playback of a synchronized stream together, so a layer cannot join at the correct phase later. |
 
 ## Requirements

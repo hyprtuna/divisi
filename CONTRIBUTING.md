@@ -101,6 +101,15 @@ paragraph, the README's "what divisi does NOT do" table, and the header
 comment of `divisi_clock.gd`. The gate does not enforce this one; reviewers
 do.
 
+## A note on .import files
+
+The `.import` sidecars next to the demo audio carry the Loop setting and must stay committed:
+without them the stems play once and the section stops. Texture `.import` files are different.
+Godot 4.7 writes fields that 4.4 does not, so opening the project on one version after the
+other rewrites `addons/divisi/icon.png.import` and `icon.svg.import` with no functional
+change. Drop that from your diff rather than committing it. `docs/` carries a `.gdignore` so
+the README images are not imported at all.
+
 ## How tests are structured
 
 Two shapes, and CI cannot hear either of them.
@@ -117,9 +126,9 @@ the headless Dummy audio driver Godot uses in CI. They can assert on state
 anything sounds like.
 
 Because CI cannot hear anything, audible behaviour, crossfade smoothness,
-whether a stinger actually lands on the beat, whether the drift counter
-holds, is covered by a manual checklist a human runs against the demo before
-a release. The pull request template's "If this touches the clock or
+whether a stinger actually lands on the beat, whether the beat count is still
+sitting on the music after ten minutes, is covered by a manual checklist a
+human runs against the demo before a release. The pull request template's "If this touches the clock or
 scheduling" section asks for this on any PR that touches timing.
 
 ## Commits
