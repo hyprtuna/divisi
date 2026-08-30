@@ -91,24 +91,26 @@ var running: bool = false
 ## matches what the player can hear.
 ##
 ## How far apart they run is a property of the machine, not of divisi, so do not read a small
-## value as a pass or a large one as a bug. Measured here over ten minutes of PulseAudio
-## playback on one Linux box it held in a band between about -19 and -31 ms with no trend,
-## while the beat count stayed exactly on the music throughout: beat 480 landed at position
-## 240.000 s at 120 BPM, with nothing skipped. The engine's own
+## value as a pass or a large one as a bug. Measured over ten minutes of PulseAudio playback on
+## one Linux box, sampled every 30 seconds, it held between -33 and -15 ms: a band 18 ms wide,
+## with no trend across the run. The beat count stayed exactly on the music throughout: at 120
+## BPM beat 1200 landed at position 600.04 s, with nothing skipped. The engine's own
 ## [url=https://docs.godotengine.org/en/stable/tutorials/audio/sync_with_audio.html]audio sync
 ## tutorial[/url] warns that on other hardware it does not stay put, because "the sound
 ## hardware clock is never exactly in sync with the system clock, [so] the timing information
 ## will slowly drift away". divisi is unaffected either way: it never reads the system clock
 ## for musical time.
 ##
-## Both terms are sampled at the last [method advance_to], not at the moment you read this.
-## Reading a live wall clock against a position last written a frame ago measures how long ago
-## the frame was, which a stall makes look like a clock problem: a 200 ms hitch alone moved
-## this by 166 ms. Sampling both at the tick means a stall shows up as the readout updating
-## less often, which is what actually happened.
+## Two details make this measure the clocks rather than something else. Both terms are sampled
+## at the last [method advance_to], not at the moment you read this: reading a live wall clock
+## against a position last written a frame ago measures how long ago the frame was, and a
+## 200 ms hitch alone moved this by 166 ms. And the baseline is taken at the first tick after
+## playback is actually running, not at [method start]: a player takes a moment to prime its
+## buffers, and on a real device that showed up as a fixed 190 ms offset that was start up
+## time, not two clocks running apart.
 var system_clock_offset_seconds: float:
 	get:
-		if not running:
+		if not running or not _baselined:
 			return 0.0
 		var wall := float(_last_tick_usec - _wall_start_usec) / 1000000.0
 		return (position - _wall_start_position) - wall
@@ -134,8 +136,10 @@ var _last_raw: float = 0.0
 var _wraps: int = 0
 # Length of one loop of the current source, or 0.0 when it does not loop.
 var _loop_length: float = 0.0
-# Wall clock reading at start, for system_clock_offset_seconds.
+# Wall clock reading at the first tick of this run, for system_clock_offset_seconds.
 var _wall_start_usec: int = 0
+# Whether that baseline has been taken yet.
+var _baselined: bool = false
 # Wall clock reading at the last advance_to, so system_clock_offset_seconds compares two
 # readings taken at the same instant.
 var _last_tick_usec: int = 0
@@ -163,9 +167,7 @@ func start(loop_length: float = 0.0) -> void:
 	_last_raw = 0.0
 	_wraps = 0
 	_loop_length = maxf(0.0, loop_length)
-	_wall_start_usec = Time.get_ticks_usec()
-	_last_tick_usec = _wall_start_usec
-	_wall_start_position = 0.0
+	_baselined = false
 	running = true
 
 
@@ -231,9 +233,7 @@ func resync_source(source_position: float, loop_length: float) -> void:
 	_last_raw = source_position
 	_wraps = 0
 	_loop_length = maxf(0.0, loop_length)
-	_wall_start_usec = Time.get_ticks_usec()
-	_last_tick_usec = _wall_start_usec
-	_wall_start_position = position
+	_baselined = false
 	running = true
 
 
@@ -361,6 +361,10 @@ func advance_to(raw: float) -> void:
 	# accumulates. Firing a beat twice is the worse failure.
 	position = maxf(position, _origin + raw + float(_wraps) * _loop_length)
 	_last_tick_usec = Time.get_ticks_usec()
+	if not _baselined:
+		_baselined = true
+		_wall_start_usec = _last_tick_usec
+		_wall_start_position = position
 
 	var target := _origin_beat + floori((position - _origin) / beat_seconds)
 	if target <= beat_index:
