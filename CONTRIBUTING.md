@@ -60,7 +60,7 @@ ones worth running yourself before you push:
 gdformat --check $(git ls-files '*.gd')
 gdlint $(git ls-files '*.gd')
 ./addons/gdUnit4/runtest.sh -a test
-git grep -nP '\x{2014}|\x{2013}' -- .   # must find nothing
+git grep -nPI '\x{2014}|\x{2013}' -- .  # must find nothing
 ```
 
 It also checks that `addons/divisi/plugin.cfg` exists with a plain `X.Y.Z`
@@ -134,7 +134,7 @@ reformats an unrelated file is two commits.
 messages or PR descriptions. Use a plain hyphen. The gate enforces it:
 
 ```sh
-git grep -nP '\x{2014}|\x{2013}'
+git grep -nPI '\x{2014}|\x{2013}'
 ```
 
 That must find nothing.

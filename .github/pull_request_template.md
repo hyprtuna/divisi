@@ -16,7 +16,7 @@ What did you actually run? Paste the output. "Should work" is not verification.
 - [ ] `gdlint` is clean
 - [ ] gdUnit4 headless tests pass on Godot 4.4
 - [ ] gdUnit4 headless tests pass on Godot 4.7
-- [ ] No em or en dashes (`git grep -nP '\x{2014}|\x{2013}'` is empty)
+- [ ] No em or en dashes (`git grep -nPI '\x{2014}|\x{2013}'` is empty)
 - [ ] New behaviour has a test that fails without the change
 
 ## If this touches the clock or scheduling

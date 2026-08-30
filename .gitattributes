@@ -1,0 +1,7 @@
+# Media is binary. Without this, git tries to diff and merge it as text, and any
+# byte sequence that happens to decode as a dash trips the repository's dash check.
+*.ogg   binary
+*.png   binary
+*.gif   binary
+*.webm  binary
+*.mkv   binary

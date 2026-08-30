@@ -109,9 +109,12 @@ jobs:
             exit 1
           fi
 
+      # -I skips binary files. A compressed ogg or webm will sooner or later hold a
+      # byte sequence that decodes as one of these, and failing the build over the
+      # innards of an audio file teaches a contributor nothing.
       - name: no em or en dashes
         run: |
-          if git grep -nP '\x{2014}|\x{2013}' -- .; then
+          if git grep -nPI '\x{2014}|\x{2013}' -- .; then
             echo "Em and en dashes are not used in this repository. Use a plain hyphen."
             exit 1
           fi
