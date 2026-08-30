@@ -1,0 +1,16 @@
+# Godot
+.godot/
+.import/
+export.cfg
+export_presets.cfg
+
+# Packaged addon
+/dist/
+*.zip
+*.sha256
+
+# gdUnit4 is a dev dependency: CONTRIBUTING says how to install it, and CI downloads it.
+/addons/gdUnit4/
+
+# gdUnit4 test reports
+/reports/

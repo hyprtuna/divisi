@@ -1,0 +1,10 @@
+# gdlint configuration for the divisi repository.
+# The gate runs `gdlint .` over the tree, so directories holding generated files or code we
+# did not write are excluded here rather than argued with in CI. Names are matched as
+# directory names, not as paths.
+excluded_directories: !!set
+  .git: null
+  .godot: null
+  gdUnit4: null
+  reports: null
+max-line-length: 100
