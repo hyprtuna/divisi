@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="DivisiLayer" format=3]
+
+[ext_resource type="Script" path="res://addons/divisi/divisi_layer.gd" id="1_txpo5"]
+[ext_resource type="AudioStream" path="res://demo/audio/combat_bass.ogg" id="2_4ytg7"]
+
+[sub_resource type="Curve" id="Curve_e77uc"]
+_data = [Vector2(0, 0.5), 0.0, 0.0, 0, 0, Vector2(0.5, 0.9), 0.0, 0.0, 0, 0, Vector2(1, 1), 0.0, 0.0, 0, 0]
+point_count = 3
+
+[resource]
+script = ExtResource("1_txpo5")
+layer_name = &"bass"
+stream = ExtResource("2_4ytg7")
+gain = SubResource("Curve_e77uc")
+max_db = -2.5

@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="DivisiLayer" format=3]
+
+[ext_resource type="Script" path="res://addons/divisi/divisi_layer.gd" id="1_7aml4"]
+[ext_resource type="AudioStream" path="res://demo/audio/combat_drums.ogg" id="2_j21ck"]
+
+[sub_resource type="Curve" id="Curve_38cj0"]
+_data = [Vector2(0, 0.7), 0.0, 0.0, 0, 0, Vector2(1, 1), 0.0, 0.0, 0, 0]
+point_count = 2
+
+[resource]
+script = ExtResource("1_7aml4")
+layer_name = &"drums"
+stream = ExtResource("2_j21ck")
+gain = SubResource("Curve_38cj0")
+max_db = -2.0

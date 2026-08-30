@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="DivisiSection" format=3]
+
+[ext_resource type="Script" path="res://addons/divisi/divisi_layer.gd" id="1_l4ua2"]
+[ext_resource type="Resource" path="res://demo/sections/explore_pads.tres" id="2_y2fwa"]
+[ext_resource type="Resource" path="res://demo/sections/explore_drums.tres" id="3_sbrlg"]
+[ext_resource type="Resource" path="res://demo/sections/explore_bass.tres" id="4_k5fno"]
+[ext_resource type="Resource" path="res://demo/sections/explore_lead.tres" id="5_duxnu"]
+[ext_resource type="Script" path="res://addons/divisi/divisi_section.gd" id="6_lyb4v"]
+
+[resource]
+script = ExtResource("6_lyb4v")
+section_name = &"explore"
+layers = Array[ExtResource("1_l4ua2")]([ExtResource("2_y2fwa"), ExtResource("3_sbrlg"), ExtResource("4_k5fno"), ExtResource("5_duxnu")])

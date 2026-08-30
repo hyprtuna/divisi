@@ -1,0 +1,25 @@
+[gd_scene load_steps=8 format=3 uid="uid://bdivisidemo2b"]
+
+[ext_resource type="Script" path="res://demo/scripts/demo_ui.gd" id="1_ui"]
+[ext_resource type="Script" path="res://addons/divisi/divisi_player.gd" id="2_player"]
+[ext_resource type="Script" path="res://addons/divisi/divisi_section.gd" id="3_section"]
+[ext_resource type="Resource" path="res://demo/sections/explore.tres" id="4_explore"]
+[ext_resource type="Resource" path="res://demo/sections/combat.tres" id="5_combat"]
+[ext_resource type="Script" path="res://addons/divisi/divisi_debug.gd" id="6_debug"]
+[ext_resource type="AudioStream" path="res://demo/audio/stinger.ogg" id="7_stinger"]
+
+[node name="Main" type="Node"]
+script = ExtResource("1_ui")
+scene_title = "divisi demo, scene two"
+next_scene = "res://demo/scenes/main.tscn"
+stinger = ExtResource("7_stinger")
+
+[node name="Music" type="Node" parent="."]
+script = ExtResource("2_player")
+sections = Array[ExtResource("3_section")]([ExtResource("4_explore"), ExtResource("5_combat")])
+autoplay = &"explore"
+intensity = 0.25
+persist_across_scenes = true
+
+[node name="Debug" type="CanvasLayer" parent="."]
+script = ExtResource("6_debug")
