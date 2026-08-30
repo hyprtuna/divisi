@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <title>divisi</title>
+  <rect width="256" height="256" rx="44" fill="#14161d"/>
+  <g fill="none" stroke-linecap="round" stroke-width="13">
+    <path d="M34 128 H104" stroke="#8fb8ff"/>
+    <path d="M104 128 C142 128 148 46 190 46 H222" stroke="#7fe08a"/>
+    <path d="M104 128 C142 128 150 94 190 94 H222" stroke="#9ee0ff"/>
+    <path d="M104 128 C142 128 150 162 190 162 H222" stroke="#ffd479"/>
+    <path d="M104 128 C142 128 148 210 190 210 H222" stroke="#ff9d7a"/>
+  </g>
+  <circle cx="104" cy="128" r="15" fill="#14161d" stroke="#8fb8ff" stroke-width="13"/>
+</svg>
