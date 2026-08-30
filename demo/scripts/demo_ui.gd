@@ -65,13 +65,19 @@ func _build_ui() -> void:
 
 	var column := VBoxContainer.new()
 	column.alignment = BoxContainer.ALIGNMENT_END
-	column.add_theme_constant_override("separation", 12)
+	column.add_theme_constant_override("separation", 14)
 	margin.add_child(column)
 
 	var title := Label.new()
 	title.text = scene_title
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	column.add_child(title)
+
+	var hint := Label.new()
+	hint.text = ("one intensity drives every layer; transitions land on the bar; the readout is live")
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hint.modulate = Color(1, 1, 1, 0.55)
+	column.add_child(hint)
 
 	# 1. The threat slider: one value, four layers.
 	var threat_row := HBoxContainer.new()
@@ -102,7 +108,7 @@ func _build_ui() -> void:
 	beat_label.custom_minimum_size = Vector2(70, 0)
 	beat_row.add_child(beat_label)
 	_beat_light = Panel.new()
-	_beat_light.custom_minimum_size = Vector2(0, 26)
+	_beat_light.custom_minimum_size = Vector2(0, 40)
 	_beat_light.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	beat_row.add_child(_beat_light)
 
@@ -136,7 +142,7 @@ func _build_ui() -> void:
 	buttons.add_child(scene_button)
 
 	_status = Label.new()
-	_status.text = "watch the drift counter in the corner."
+	_status.text = "bar:beat in the corner is read from the audio, not from frames."
 	column.add_child(_status)
 
 
