@@ -49,14 +49,50 @@ const SILENCE_DB := -80.0
 const MAX_CATCH_UP_BEATS := 16
 
 ## Beats per minute of the stream this clock is following.
+##
+## Writing this while the clock is running is a tempo change, and the beat grid re-anchors to
+## the position the write happened at: the counts carry on from where they are, the beat after
+## the write is one beat of the new tempo away, and nothing is emitted twice. The current beat
+## is cut short, which is what an abrupt tempo change is.
+##
+## Zero or negative is refused with an error rather than clamped. A clamp to a millionth of a
+## beat per minute is one beat every 694 days: a clock that looks alive and never emits again.
 @export_range(1.0, 400.0, 0.01, "or_greater", "suffix:BPM") var bpm: float = 120.0:
 	set(value):
-		bpm = maxf(0.000001, value)
+		if value <= 0.0:
+			push_error(
+				(
+					"divisi: bpm must be greater than 0. Refusing %f, the tempo stays %f."
+					% [value, bpm]
+				)
+			)
+			return
+		var changed := not is_equal_approx(value, bpm)
+		bpm = value
+		if changed:
+			_reanchor_running_grid()
 
 ## Beats in a bar. 4 is 4/4.
+##
+## Writing this while the clock is running re-anchors the bar line the same way [member bpm]
+## does, so the bar the music is in finishes on the new meter rather than on the old one, and
+## [method next_boundary] keeps answering with a real downbeat.
+##
+## Zero or negative is refused with an error rather than clamped, the same as [member bpm].
 @export_range(1, 32, 1, "or_greater") var beats_per_bar: int = 4:
 	set(value):
-		beats_per_bar = maxi(1, value)
+		if value <= 0:
+			push_error(
+				(
+					"divisi: beats_per_bar must be at least 1. Refusing %d, the meter stays %d."
+					% [value, beats_per_bar]
+				)
+			)
+			return
+		var changed := value != beats_per_bar
+		beats_per_bar = value
+		if changed:
+			_reanchor_running_grid()
 
 ## The player to read musical time from. When a [DivisiPlayer] owns the clock it sets this
 ## itself and drives [method tick] directly, so that the clock is always read before the
@@ -140,13 +176,18 @@ var bar_seconds: float:
 		return beat_seconds * float(beats_per_bar)
 
 # Musical position at which the current source's timeline begins. A section change moves this
-# forward instead of resetting position, so beat and bar indexes keep counting across it.
+# forward instead of resetting position, so beat and bar indexes keep counting across it. This
+# is the stream's anchor: source_position and the loop wrap count are measured from it.
 var _origin: float = 0.0
-# Beat index of the beat that sits exactly on _origin.
-var _origin_beat: int = 0
-# Which beat of the bar that beat is. Zero after start() and rebase(), which both anchor on a
-# downbeat; resync_source() can land anywhere.
-var _origin_beat_in_bar: int = 0
+# Musical position the beat grid is anchored at, with the beat index that sits exactly on it.
+# Normally the same point as _origin, because start(), rebase() and resync_source() lay both
+# down together. A tempo or meter written while the clock is running moves this one alone: the
+# grid above the stream changed, the stream under it did not restart.
+var _grid_at: float = 0.0
+var _grid_beat: int = 0
+# Which beat of the bar the beat on the grid anchor is. Zero after start() and rebase(), which
+# both anchor on a downbeat; resync_source() and a mid play meter change can land anywhere.
+var _grid_beat_in_bar: int = 0
 # Raw playback position last seen, used to notice a loop wrap.
 var _last_raw: float = 0.0
 # Completed loops of the current source.
@@ -180,8 +221,9 @@ func start(loop_length: float = 0.0) -> void:
 	beat_in_bar = beats_per_bar - 1
 	skipped_beats = 0
 	_origin = 0.0
-	_origin_beat = 0
-	_origin_beat_in_bar = 0
+	_grid_at = 0.0
+	_grid_beat = 0
+	_grid_beat_in_bar = 0
 	_last_raw = 0.0
 	_wraps = 0
 	_loop_length = maxf(0.0, loop_length)
@@ -229,8 +271,9 @@ func rebase(
 		beats_per_bar = new_beats_per_bar
 	position = maxf(position, at_position + source_position)
 	_origin = at_position
-	_origin_beat = boundary_beat
-	_origin_beat_in_bar = 0
+	_grid_at = at_position
+	_grid_beat = boundary_beat
+	_grid_beat_in_bar = 0
 	_last_raw = source_position
 	_wraps = 0
 	_loop_length = maxf(0.0, loop_length)
@@ -242,7 +285,7 @@ func rebase(
 		beat_in_bar = beats_per_bar - 1
 		return
 
-	beat_in_bar = (beat_index - _origin_beat) % beats_per_bar
+	beat_in_bar = (beat_index - _grid_beat) % beats_per_bar
 	if not downbeat_already_out:
 		bar_index += 1
 		bar.emit(bar_index)
@@ -262,8 +305,9 @@ func rebase(
 func resync_source(source_position: float, loop_length: float) -> void:
 	var beats_in := floori(source_position / beat_seconds)
 	_origin = position - source_position
-	_origin_beat = beat_index - beats_in
-	_origin_beat_in_bar = posmod(beat_in_bar - beats_in, beats_per_bar)
+	_grid_at = _origin
+	_grid_beat = beat_index - beats_in
+	_grid_beat_in_bar = posmod(beat_in_bar - beats_in, beats_per_bar)
 	_last_raw = source_position
 	_wraps = 0
 	_loop_length = maxf(0.0, loop_length)
@@ -288,14 +332,49 @@ func to_dict() -> Dictionary:
 ## Puts back counts taken by [method to_dict]. Call [method resync_source] afterwards to
 ## attach them to the stream that is now playing. Missing keys keep their current values, so a
 ## dictionary from an older version restores what it can rather than failing.
+##
+## Every value is checked against what playing can actually produce, and a value outside that
+## is refused or clamped with a [method @GlobalScope.push_warning] naming the field. This
+## dictionary is the one input divisi takes from outside itself, and SECURITY.md names it as
+## the surface worth scrutinising: a beat index of -500, or a beat of the bar past the end of
+## the bar, is a state no amount of playing could reach, and every boundary this clock answers
+## afterwards is derived from it.
 func from_dict(state: Dictionary) -> void:
-	bpm = float(state.get("bpm", bpm))
-	beats_per_bar = int(state.get("beats_per_bar", beats_per_bar))
-	position = float(state.get("position", position))
-	beat_index = int(state.get("beat_index", beat_index))
-	bar_index = int(state.get("bar_index", bar_index))
-	beat_in_bar = int(state.get("beat_in_bar", beat_in_bar))
-	skipped_beats = int(state.get("skipped_beats", skipped_beats))
+	if state.has("bpm"):
+		var restored_bpm := float(state["bpm"])
+		if restored_bpm > 0.0:
+			bpm = restored_bpm
+		else:
+			push_warning(
+				(
+					"divisi: restored state has bpm %f, which is not a tempo. Keeping %f."
+					% [restored_bpm, bpm]
+				)
+			)
+	if state.has("beats_per_bar"):
+		var restored_beats := int(state["beats_per_bar"])
+		if restored_beats > 0:
+			beats_per_bar = restored_beats
+		else:
+			push_warning(
+				(
+					"divisi: restored state has beats_per_bar %d, which is not a bar. Keeping %d."
+					% [restored_beats, beats_per_bar]
+				)
+			)
+	position = _restored_float(state, "position", position, 0.0)
+	beat_index = _restored_int(state, "beat_index", beat_index, -1)
+	bar_index = _restored_int(state, "bar_index", bar_index, -1)
+	beat_in_bar = _restored_int(state, "beat_in_bar", beat_in_bar, -1)
+	skipped_beats = _restored_int(state, "skipped_beats", skipped_beats, 0)
+	if beat_in_bar >= beats_per_bar:
+		push_warning(
+			(
+				"divisi: restored state has beat_in_bar %d, past the end of a bar of %d. Clamping."
+				% [beat_in_bar, beats_per_bar]
+			)
+		)
+		beat_in_bar = beats_per_bar - 1
 
 
 ## Reads the audio device, advances [member position] and emits any beats and bars that were
@@ -313,14 +392,15 @@ func tick() -> void:
 func next_boundary(quantize: DivisiQuantize.Mode) -> float:
 	if quantize == DivisiQuantize.NOW:
 		return position
-	var beats_since_origin := (position - _origin) / beat_seconds
-	var n := floori(beats_since_origin) + 1
+	var beats_since_anchor := (position - _grid_at) / beat_seconds
+	var n := floori(beats_since_anchor) + 1
 	if quantize == DivisiQuantize.NEXT_BAR:
-		# _origin is a downbeat after start() and rebase(), but not after resync_source(), so
-		# the bar line is counted from the beat of the bar that _origin actually sits on.
-		while (_origin_beat_in_bar + n) % beats_per_bar != 0:
+		# The anchor is a downbeat after start() and rebase(), but not after resync_source() or
+		# a mid play meter change, so the bar line is counted from the beat of the bar the
+		# anchor actually sits on.
+		while (_grid_beat_in_bar + n) % beats_per_bar != 0:
 			n += 1
-	return _origin + float(n) * beat_seconds
+	return _grid_at + float(n) * beat_seconds
 
 
 ## Seconds from now until the next [param quantize] boundary. 0.0 for
@@ -339,14 +419,14 @@ func landing_bar(musical_position: float) -> int:
 	var bar_started_at := beat_index - beat_in_bar
 	var crossed := (boundary_beat - bar_started_at) / beats_per_bar
 	var lands_on_a_downbeat := (
-		posmod(boundary_beat - _origin_beat + _origin_beat_in_bar, beats_per_bar) == 0
+		posmod(boundary_beat - _grid_beat + _grid_beat_in_bar, beats_per_bar) == 0
 	)
 	return bar_index + maxi(0, crossed) + (0 if lands_on_a_downbeat else 1)
 
 
 ## The beat index that [param musical_position] falls on, against the current grid.
 func beat_at(musical_position: float) -> int:
-	return _origin_beat + floori((musical_position - _origin) / beat_seconds)
+	return _grid_beat + floori((musical_position - _grid_at) / beat_seconds)
 
 
 ## Latency compensated playback position of [param from_player], in seconds.
@@ -416,7 +496,7 @@ func advance_to(raw: float) -> void:
 		_wall_start_usec = _last_tick_usec
 		_wall_start_position = position
 
-	var target := _origin_beat + floori((position - _origin) / beat_seconds)
+	var target := _grid_beat + floori((position - _grid_at) / beat_seconds)
 	if target <= beat_index:
 		return
 
@@ -441,3 +521,60 @@ func advance_to(raw: float) -> void:
 		beat.emit(beat_index)
 		if downbeat:
 			bar.emit(bar_index)
+
+
+# Moves the beat grid onto the position the music is at right now, keeping the counts where
+# they are. This is the arithmetic rebase() uses at a section boundary, with the boundary being
+# now and the stream underneath left alone.
+#
+# Without it a tempo written mid play left the grid anchored to the old tempo, and the beat the
+# new grid claimed the music was on jumped: doubling the tempo emitted the whole jump as a
+# burst of beats in one frame, halving it waited the jump out in silence, and skipped_beats
+# reported 0 either way. Only an actual change re-anchors, because moving the anchor to now on
+# every write would push the next beat one beat into the future every frame and no beat would
+# ever arrive.
+func _reanchor_running_grid() -> void:
+	if not running or beat_index < 0:
+		# Nothing has been emitted yet, so there is no count to keep and the grid start() laid
+		# down is still the right one.
+		return
+	_grid_at = position
+	_grid_beat = beat_index
+	# A meter that just got shorter can leave the beat of the bar past the end of the new bar.
+	# The bar finishes as soon as the new meter allows rather than claiming a downbeat here.
+	beat_in_bar = mini(beat_in_bar, beats_per_bar - 1)
+	_grid_beat_in_bar = beat_in_bar
+
+
+# One restored integer count, refused below the lowest value that playing can produce. The
+# field is named in the warning because the caller is a game handing divisi a dictionary it may
+# have read off disk, and "the clock is wrong" is not something anyone can act on.
+static func _restored_int(state: Dictionary, key: String, current: int, lowest: int) -> int:
+	if not state.has(key):
+		return current
+	var value := int(state[key])
+	if value >= lowest:
+		return value
+	push_warning(
+		(
+			"divisi: restored state has %s %d, below the %d that playing starts from. Clamping."
+			% [key, value, lowest]
+		)
+	)
+	return lowest
+
+
+# The same, for a count that is measured in seconds.
+static func _restored_float(state: Dictionary, key: String, current: float, lowest: float) -> float:
+	if not state.has(key):
+		return current
+	var value := float(state[key])
+	if value >= lowest:
+		return value
+	push_warning(
+		(
+			"divisi: restored state has %s %f, below the %f that playing starts from. Clamping."
+			% [key, value, lowest]
+		)
+	)
+	return lowest
