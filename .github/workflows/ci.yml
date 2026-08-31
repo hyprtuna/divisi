@@ -85,15 +85,21 @@ jobs:
       - name: import project resources
         run: godot --headless --path . --import --quit-after 1
 
-      # runtest.sh's own exit codes: 0 all tests passed, 100 the run ended in
-      # test failures, 101 the run ended in warnings only. 100 and 101 are
-      # both non-zero, so a failing or warning run fails this step without
-      # any extra exit-code handling here. Documented at:
-      # https://godot-gdunit-labs.github.io/gdUnit4/latest/advanced_testing/cmd/
+      # Not runtest.sh. That script does not pass --headless, so on a runner
+      # with no display Godot cannot create a DisplayServer and dies before
+      # any test runs. Godot is invoked here the same way runtest.sh does,
+      # with --headless added, plus --ignoreHeadlessMode, because gdUnit4
+      # refuses to start under a headless display server unless it is told
+      # that is deliberate.
+      #
+      # Exit codes come from the cmd tool: 0 all tests passed, 100 the run
+      # ended in test failures, 101 warnings only. Verified by hand on both
+      # legs, with a deliberately failing test, which exited 100.
       - name: gdUnit4 headless tests
         run: |
-          export GODOT_BIN="$(command -v godot)"
-          ./addons/gdUnit4/runtest.sh -a test
+          godot --headless --path . -d --remote-debug tcp://127.0.0.1:0 \
+            -s res://addons/gdUnit4/bin/GdUnitCmdTool.gd \
+            -a test --ignoreHeadlessMode
 
       # plugin.cfg is the one file Godot itself reads to enable the addon, so
       # its absence or a malformed version is worth catching on every PR
