@@ -239,6 +239,12 @@ func play(section_name: StringName = &"") -> bool:
 	current_section = section
 
 	clock.player = _active
+	# Loading is not playing. Writing the tempo and the meter into a clock that is still
+	# running is a mid play change: it re-anchors the beat grid, and where the incoming meter
+	# is shorter than the beat of the bar the outgoing section was on it announces the bar that
+	# closes. Nothing sounded, and the index that bar would carry is counted off the section
+	# being replaced. start() puts the clock back to running below.
+	clock.stop()
 	clock.bpm = section.bpm
 	clock.beats_per_bar = section.beats_per_bar
 	clock.start(section.loop_length())
@@ -440,6 +446,12 @@ func restore_state(state: Dictionary) -> bool:
 	_idle = _music_b
 
 	clock.player = null
+	# The same reason play() stops it: from_dict() writes the saved meter through its setter,
+	# and on a running clock that is a mid play meter change. Restoring a save whose bar is
+	# shorter than the beat of the bar the outgoing state was on announced a downbeat that
+	# never sounded, carrying an index from the run being thrown away, so a listener saw the
+	# bar count go 0, 1, then 41. resync_source() puts the clock back to running below.
+	clock.stop()
 	var saved_clock: Dictionary = state.get("clock", {})
 	if not saved_clock.has("bpm"):
 		clock.bpm = section.bpm
