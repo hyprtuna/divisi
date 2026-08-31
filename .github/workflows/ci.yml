@@ -32,9 +32,12 @@ jobs:
         # matrix, so each leg pins the gdUnit4 release that actually runs on
         # its Godot version. See the compatibility table in the gdUnit4 repo.
         include:
-          - godot-version: '4.4'
+          # setup-godot wants a full version. '4.4' is rejected outright:
+          # "Invalid version: 4.4". These are the two builds the addon is
+          # actually tested against.
+          - godot-version: '4.4.1'
             gdunit-version: '5.1.1'
-          - godot-version: '4.7'
+          - godot-version: '4.7.2'
             gdunit-version: '6.2.1'
     steps:
       - uses: actions/checkout@v7
