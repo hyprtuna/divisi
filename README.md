@@ -105,6 +105,12 @@ func _process(_delta: float) -> void:
 	player.intensity = get_threat_level()
 
 
+func get_threat_level() -> float:
+	# Stand in for your game's own number, from 0 to 1. Wiring this to something real is the
+	# whole of divisi's adaptive behaviour.
+	return 0.5
+
+
 func _on_alarm_triggered() -> void:
 	player.transition_to(&"explore", DivisiQuantize.NEXT_BAR)
 ```
@@ -118,9 +124,16 @@ unambiguous about which properties exist and what they do.
 ## What it does
 
 - **`DivisiClock`**: musical time for one `AudioStreamPlayer`, with `beat` and
-  `bar` signals.
+  `bar` signals. Writing `bpm` or `beats_per_bar` while it is running is a
+  tempo or meter change: the beat grid re-anchors where you wrote it, the beat
+  and bar counts carry on from there, and nothing is emitted twice or waited
+  out in silence. A tempo of zero or less is refused with an error rather than
+  clamped to something that never emits again.
 - **`DivisiPlayer`**: plays adaptive music, layered sections, bar-quantized
-  transitions between them, and stingers over the top.
+  transitions between them, and stingers over the top. A stinger's duck is
+  held for the length of the stinger and released, both counted in plain
+  seconds rather than musical time, so pausing the music does not hold the duck
+  open for the length of the pause.
 - **`DivisiSection`**: a named piece of music, a tempo, a time signature and
   the layers that make it up. Its stems must be imported with Loop ticked; a
   section that runs out stops and says so through `playback_finished`.
@@ -141,7 +154,7 @@ Facts below verified as of 2026-08-31.
 |---|---|---|---|---|---|---|---|
 | **Godot built-ins alone** (`AudioStreamSynchronized` + `AudioStreamInteractive`, 4.3+) | No signals at all | No | Has a bar/beat quantized transition table | No | No | Yes | MIT |
 | **divisi** | Yes | Yes | Yes | Yes | Yes | Yes | MIT |
-| **RhythmNotifier** (michaelgundlache/rhythm_notifier, 64 stars, MIT, on the deprecated Asset Library, last pushed 2025-09-12) | Beat signals only, correctly latency compensated | No | No | No | No | Yes | MIT |
+| **RhythmNotifier** (michaelgundlach/rhythm_notifier, 64 stars, MIT, on the deprecated Asset Library, last pushed 2025-09-12) | Beat signals only, correctly latency compensated | No | No | No | No | Yes | MIT |
 | **Maaack's Music Controller** (Maaack/Godot-Music-Controller, 12 stars, Asset Store, active) | No | No | No | No | Yes, crossfades tracks | Yes | MIT |
 | **Pocket Chordsmith** (Samfa12, Asset Store, MIT, active) | Yes | Yes, adaptive state callbacks | Yes | Yes | Not applicable | Chart data from its own web app / Pocket DAW, not your own stems | MIT |
 | **Project-DJ-Godot** (RROP, Asset Store, LGPL-2.1, prebuilt binaries, minimum Godot 4.5, publisher marks current version unstable) | Its own beat analysis | Not the point, it is a DJ/rhythm-game audio engine | Not applicable | Not applicable | Not applicable | Its own multitrack mixing and time stretching, replaces the engine's audio path | LGPL-2.1 |
@@ -168,7 +181,7 @@ alternative for a large project.
 | Tempo or key detection | You tell divisi the tempo. |
 | Sidechain compression | The stinger duck is a plain level dip on the music players; nothing analyses the stinger's envelope. |
 | An editor main-screen panel in v0.1 | Sections and layers are inspector resources. |
-| Overlapping crossfades | There are two music players, so a transition scheduled while another crossfade is still running replaces the oldest section rather than layering a third. The levels stay continuous, but keep `transition_seconds` shorter than the gap between transitions. |
+| Overlapping crossfades | There are two music players, so a transition scheduled while another crossfade is still running replaces the oldest section rather than layering a third. The levels stay continuous, but the content is spliced on both sides: halfway through a fade both players sit at 0.707 amplitude, so the section being cut stops there and the incoming one starts there rather than fading in from silence. Keep `transition_seconds` shorter than the gap between transitions. |
 | Music that keeps counting while the scene tree is paused | `_process` stops and the audio server does not, so on unpause the clock jumps forward and reports the gap in `skipped_beats`. Pause the music too, or give the player a `process_mode` that survives the pause. |
 | Introducing a new layer mid-track, in phase | The engine starts every sub playback of a synchronized stream together, so a layer cannot join at the correct phase later. |
 

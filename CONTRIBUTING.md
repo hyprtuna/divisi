@@ -142,20 +142,33 @@ other rewrites `addons/divisi/icon.png.import` and `icon.svg.import` with no fun
 change. Drop that from your diff rather than committing it. `docs/` carries a `.gdignore` so
 the README images are not imported at all.
 
+The same trap, in a different place: none of the ten `demo/sections/*.tres` files carries a
+`uid=` in its `[gd_resource]` header. They load correctly without one, but the editor writes
+one in the first time it saves any of them, so opening a section in the inspector and saving
+produces a diff that changes nothing. Drop it, unless you are deliberately baking the uids in
+across all ten at once.
+
 ## How tests are structured
 
-Two shapes, and CI cannot hear either of them.
+Two shapes for the addon and one for the documentation. CI cannot hear any of
+them.
 
-**Pure arithmetic.** `divisi_clock_test.gd` and
-`divisi_clock_scheduling_test.gd` drive `DivisiClock.advance_to()` and
+**Pure arithmetic.** The `divisi_clock_*` suites, apart from
+`divisi_clock_tick_test.gd`, drive `DivisiClock.advance_to()` and
 `next_boundary()` by hand, with no `AudioStreamPlayer` and no audio device.
-This is where beat and bar counting, rebasing and drift arithmetic should be
-pinned down, because a test here needs nothing faked.
+This is where beat and bar counting, rebasing, tempo changes, restore
+sanitising and drift arithmetic should be pinned down, because a test here
+needs nothing faked. `tick()` is the one path that reads a real device, and it
+has a suite of its own for that reason.
 
 **Player tests.** Tests that exercise `DivisiPlayer` run real playback under
 the headless Dummy audio driver Godot uses in CI. They can assert on state
 (`current_section`, `clock.position`, `layer_gains()`) but not on what
 anything sounds like.
+
+**The README's own snippet.** `divisi_readme_test.gd` pulls the quickstart out
+of `README.md` and compiles it. A snippet nobody can paste is worse than no
+snippet, and 0.1.0 shipped one that did not get past its parse.
 
 Because CI cannot hear anything, audible behaviour, crossfade smoothness,
 whether a stinger actually lands on the beat, whether the beat count is still
@@ -186,7 +199,13 @@ That must find nothing.
 2. Fill in `.github/pull_request_template.md`. The Verification section
    wants what you actually ran and its output, not "should work".
 3. `gate` must be green.
-4. New behaviour needs a test that fails without the change.
+4. New behaviour needs a test that fails without the change, and the failure has
+   to have been seen. Revert the change in a scratch copy, run that test on its
+   own, and put the red output in the PR. A test written after the fix, never
+   run against the defect, certifies nothing: two of the regression tests in
+   0.1.0 passed just as happily with the fix taken back out. If a case covers
+   behaviour that already worked and has no defect to be red against, say so and
+   show it catching a deliberate break instead.
 
 ## Security
 
