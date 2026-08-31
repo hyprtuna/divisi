@@ -107,8 +107,12 @@ var _idle: AudioStreamPlayer = null
 var _active_section: DivisiSection = null
 var _idle_section: DivisiSection = null
 
-# Musical position a scheduled transition fires at.
+# Musical position a scheduled transition fires at, and the beat that position is the
+# position of. The beat is what the announced bar was derived from, and it is handed back to
+# the clock at the rebase so the bar the music lands in is the bar the announcement named,
+# whatever was written to the tempo in between.
 var _pending_at: float = 0.0
+var _pending_beat: int = 0
 # Crossfade in progress: seconds elapsed, and its total length. _fade_seconds of 0 means no
 # fade is running.
 var _fade_elapsed: float = 0.0
@@ -256,6 +260,7 @@ func transition_to(
 		return false
 
 	pending_section = section
+	_pending_beat = clock.next_boundary_beat(quantize)
 	_pending_at = clock.next_boundary(quantize)
 	transition_started.emit(
 		current_section.section_name, section.section_name, clock.landing_bar(_pending_at)
@@ -505,7 +510,9 @@ func _fire_transition() -> void:
 	current_section = section
 
 	clock.player = _active
-	clock.rebase(_pending_at, overshoot, loop_length, section.bpm, section.beats_per_bar)
+	clock.rebase(
+		_pending_at, overshoot, loop_length, section.bpm, section.beats_per_bar, _pending_beat
+	)
 
 	_fade_seconds = maxf(0.0, transition_seconds)
 	_fade_elapsed = carry * _fade_seconds
