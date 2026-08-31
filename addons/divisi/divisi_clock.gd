@@ -244,6 +244,11 @@ var _grid_beat_in_bar: int = 0
 # Where on the grid the beat that was last emitted sits. Not where the clock was when it
 # noticed: the frame that emits a beat runs a fraction of a beat after the beat itself, and
 # what the re-anchor below needs is the beat, not the frame.
+#
+# Never past position: a beat cannot have been emitted in the future. advance_to() and
+# resync_source() cannot break that on their own, because each takes the position of a beat
+# the music has already reached. rebase() can, because it is handed a boundary read off a grid
+# that a tempo write may have moved under it, so it clamps.
 var _last_beat_at: float = 0.0
 # Raw playback position last seen, used to notice a loop wrap.
 var _last_raw: float = 0.0
@@ -251,6 +256,8 @@ var _last_raw: float = 0.0
 var _wraps: int = 0
 # Length of one loop of the current source, or 0.0 when it does not loop.
 var _loop_length: float = 0.0
+# The beat this clock will not emit past, or -1 for no ceiling. See hold_beats_at().
+var _ceiling_beat: int = -1
 # Wall clock reading at the first tick of this run, for system_clock_offset_seconds.
 var _wall_start_usec: int = 0
 # Whether that baseline has been taken yet.
@@ -286,12 +293,30 @@ func start(loop_length: float = 0.0) -> void:
 	_wraps = 0
 	_loop_length = maxf(0.0, loop_length)
 	_baselined = false
+	_ceiling_beat = -1
 	running = true
 
 
 ## Stops counting. [member position] and the indexes keep their last values.
 func stop() -> void:
 	running = false
+
+
+## Emits no beat past [param beat], until this is called again with a negative one to lift the
+## ceiling.
+##
+## A scheduler with work waiting on a beat holds the clock there, so that the work is done
+## before the beats behind that beat go out. It is doing nothing at all while the beat is still
+## ahead, which is the ordinary case. It matters when a tempo write moves the beat into the
+## past: the frame that notices has the boundary beat and the beats behind it to emit at once,
+## and those are beats of the grid the work is about to replace. Emitted first, at the outgoing
+## tempo, they are beats the incoming grid has not reached yet, and it has to wait through them
+## in silence before it does.
+##
+## Held beats are not dropped and are not counted in [member skipped_beats]. They are emitted by
+## the tick after the ceiling is lifted, against whatever grid is in place by then.
+func hold_beats_at(beat: int) -> void:
+	_ceiling_beat = beat
 
 
 ## Moves the clock onto a new stream without resetting [member position] or the beat and bar
@@ -362,11 +387,18 @@ func rebase(
 		# Nothing has been emitted at or past the boundary, so the next tick announces it.
 		beat_index = boundary_beat - 1
 		beat_in_bar = beats_per_bar - 1
-		_last_beat_at = position_of_beat(beat_index)
+		_last_beat_at = minf(position_of_beat(beat_index), position)
 		return
 
 	beat_in_bar = (beat_index - _grid_beat) % beats_per_bar
-	_last_beat_at = position_of_beat(beat_index)
+	# On the incoming grid the beats already emitted past the boundary can sit ahead of where
+	# the music is: a tempo write while the transition was pending crossed them at its own
+	# faster spacing, and the section landing here is slower, so their positions on the new
+	# grid are further apart than the ones they were emitted at. Recording one of them as
+	# emitted in the future puts the next beat that whole difference away, and the beat signal
+	# goes silent for up to a couple of beats at the top of the new section. Clamped for the
+	# reason _reanchor_running_grid() clamps.
+	_last_beat_at = minf(position_of_beat(beat_index), position)
 	if not downbeat_already_out:
 		bar_index += 1
 		bar.emit(bar_index)
@@ -637,6 +669,10 @@ func advance_to(raw: float) -> void:
 		_wall_start_position = position
 
 	var target := beat_at(position)
+	# Work scheduled on a beat is done before the beats behind that beat go out. See
+	# hold_beats_at().
+	if _ceiling_beat >= 0:
+		target = mini(target, _ceiling_beat)
 	if target <= beat_index:
 		return
 
