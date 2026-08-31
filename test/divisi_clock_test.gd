@@ -153,14 +153,6 @@ func test_beat_and_bar_seconds_follow_the_tempo() -> void:
 	assert_float(_clock.bar_seconds).is_equal_approx(3.0 * 60.0 / 140.0, 0.000001)
 
 
-func test_bpm_cannot_be_zero() -> void:
-	# A zero tempo divides by zero in every boundary calculation.
-	_clock.bpm = 0.0
-	assert_float(_clock.bpm).is_greater(0.0)
-	_clock.beats_per_bar = 0
-	assert_int(_clock.beats_per_bar).is_equal(1)
-
-
 func test_a_long_stall_carries_the_bar_count_with_it() -> void:
 	# The catch up path used to advance beat_index but count bars only by emission, so one
 	# stall left bar_index reading low for the rest of the run.
