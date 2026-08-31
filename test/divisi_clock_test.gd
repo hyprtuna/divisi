@@ -182,13 +182,23 @@ func test_a_rebase_after_an_overshoot_never_replays_a_beat() -> void:
 		assert_int(_beats[i]).is_greater(_beats[i - 1])
 
 
-func test_a_rebase_after_an_overshoot_still_announces_the_downbeat() -> void:
+func test_how_late_the_frame_noticed_does_not_change_the_bar_a_rebase_lands_in() -> void:
+	# The frame that crossed the boundary overshot it by 0.6 s, long enough to have emitted the
+	# beat after the boundary as well. The boundary beat is a downbeat on the outgoing grid and
+	# its bar has already gone out, so the rebase must not announce a second one for the same
+	# instant: a transition noticed 0.01 s late and one noticed 0.6 s late land in the same bar.
+	#
+	# This case used to assert the opposite, and the opposite is what the clock did: past an
+	# overshoot of one beat it announced again, which put the bar the music landed in one past
+	# the bar landing_bar() had already named. The two answers are asked of the same grid now.
 	_clock.start(16.0)
 	_clock.advance_to(0.0)
 	_clock.advance_to(2.6)
-	var bars_before := _bars.size()
+	var announced := _clock.landing_bar(2.0)
+	_bars.clear()
 	_clock.rebase(2.0, 0.6, 16.0, 120.0, 4)
-	assert_int(_bars.size()).is_equal(bars_before + 1)
+	assert_array(_bars).is_empty()
+	assert_int(_clock.bar_index).is_equal(announced)
 
 
 func test_the_system_clock_offset_reads_zero_before_the_clock_starts() -> void:
