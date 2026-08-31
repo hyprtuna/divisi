@@ -22,6 +22,13 @@ var _bars: Array[int] = []
 var _beats: Array[int] = []
 var _beat_in_bars: Array[int] = []
 var _stinger_beat: int = -99
+# The reading the clock is fed each frame. Up to a landing it is the frame count, because the
+# clock has been on one stream since the top of the run. The rebase moves the clock's origin
+# onto the boundary, so after a landing the reading is a position inside the incoming stream
+# and carries on from the overshoot the rebase dropped it in at. Feeding frame time past that
+# point hands the clock a jump the size of the boundary, which bursts out the beats being
+# measured for and hides the gap in front of them.
+var _raw: float = 0.0
 
 
 # A player whose clock this suite drives itself. play() starts the real stream players, which
@@ -61,6 +68,13 @@ func _frame(player: DivisiPlayer, at_frame: int) -> void:
 	player._process(1.0 / 60.0)
 
 
+# The same frame, on whatever timeline the clock is currently reading. See _raw.
+func _frame_raw(player: DivisiPlayer) -> void:
+	_raw += 1.0 / 60.0
+	player.clock.advance_to(_raw)
+	player._process(1.0 / 60.0)
+
+
 # One scheduled transition, with a tempo written while it is pending. Returns an empty string
 # when the landing keeps every promise the scheduling made, and what it broke when it does not.
 func _one_transition(warm: int, new_bpm: float) -> String:
@@ -81,17 +95,29 @@ func _one_transition(warm: int, new_bpm: float) -> String:
 	player.clock.bpm = new_bpm
 
 	var landed_frame := -1
+	var beats_at_landing := -1
 	var guard := 0
+	_raw = float(frame) / 60.0
 	while guard < 4000:
 		guard += 1
 		frame += 1
 		var before := player.current_section.section_name
-		_frame(player, frame)
+		_frame_raw(player)
 		if landed_frame < 0 and before != player.current_section.section_name:
 			landed_frame = frame
 			# The landing hands the clock to the incoming stream player; keep it detached.
 			player.clock.player = null
-		if landed_frame >= 0 and not _beats.is_empty() and _beats[-1] >= boundary_beat:
+			# From here the clock is reading the incoming stream, which the rebase started at
+			# its overshoot rather than at the frame count. See _raw.
+			_raw = player.clock.source_position
+			beats_at_landing = _beats.size()
+		# A beat the landing frame itself emitted says nothing about the gap after the landing.
+		# When the write pushed the boundary into the past, that frame emits the boundary beat
+		# and the beats behind it together, so waiting for the boundary beat to appear ends the
+		# settle in the landing frame and measures a gap of zero exactly where there is one.
+		# The gap being measured is to the first beat of the new section, so wait for a beat
+		# that the landing frame did not already emit.
+		if landed_frame >= 0 and _beats.size() > beats_at_landing:
 			break
 
 	var settled_bar := player.clock.bar_index

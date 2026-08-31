@@ -289,6 +289,15 @@ func transition_to(
 	_pending_quantize = quantize
 	_pending_beat = clock.next_boundary_beat(quantize)
 	_pending_at = clock.next_boundary(quantize)
+	# Hold the clock at the boundary until the landing has happened. A tempo written between
+	# here and there can move that beat into the past, and then the frame that crosses it emits
+	# the boundary beat and the beats behind it together, at the outgoing tempo, before the
+	# incoming section is underneath them. The incoming grid then has to wait through beats it
+	# never reached: at the widest tempo jump the inspector suggests that was over two beats of
+	# silence at the top of the new section. DivisiQuantize.NOW is an instant rather than a
+	# beat and holds nothing.
+	if quantize != DivisiQuantize.NOW:
+		clock.hold_beats_at(_pending_beat)
 	transition_started.emit(
 		current_section.section_name, section.section_name, clock.landing_bar(_pending_at)
 	)
@@ -305,6 +314,7 @@ func cancel_transition() -> bool:
 	if pending_section == null:
 		return false
 	pending_section = null
+	clock.hold_beats_at(-1)
 	return true
 
 
@@ -535,6 +545,8 @@ func _stop_players() -> void:
 
 func _cancel_pending() -> void:
 	pending_section = null
+	if clock != null:
+		clock.hold_beats_at(-1)
 	_stinger_pending = false
 	_stinger_stream = null
 
@@ -574,6 +586,9 @@ func _stinger_boundary_at() -> float:
 func _fire_transition() -> void:
 	var section := pending_section
 	pending_section = null
+	# The landing is what the hold was waiting for. Any beats it held back come out on the next
+	# tick, on the incoming section's grid.
+	clock.hold_beats_at(-1)
 
 	# The boundary passed somewhere inside the frame that just ran. Starting the incoming
 	# stream at that overshoot rather than at zero puts its first sample back on the boundary,
