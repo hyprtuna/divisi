@@ -64,9 +64,14 @@ const MAX_RESTORED_COUNT := 1000000000
 ## Beats per minute of the stream this clock is following.
 ##
 ## Writing this while the clock is running is a tempo change, and the beat grid re-anchors to
-## the position the write happened at: the counts carry on from where they are, the beat after
-## the write is one beat of the new tempo away, and nothing is emitted twice. The current beat
-## is cut short, which is what an abrupt tempo change is.
+## the beat that was last emitted: the counts carry on from where they are, the beat after the
+## write is one beat of the new tempo away from the beat before it, and nothing is emitted
+## twice. The current beat is cut short or stretched, which is what a tempo change is.
+##
+## Writing it on consecutive frames is a ramp, and ramps through: because the grid is pinned to
+## the last beat rather than to the position of each write, a beat that is already part way
+## through is not pushed away again by the next write, and the beats land at roughly the tempo
+## the ramp is passing through as it passes through it.
 ##
 ## Zero, negative, and anything that is not a finite number are refused with an error rather
 ## than clamped. A clamp to a millionth of a beat per minute is one beat every 694 days: a
@@ -224,6 +229,10 @@ var _grid_beat: int = 0
 # Which beat of the bar the beat on the grid anchor is. Zero after start() and rebase(), which
 # both anchor on a downbeat; resync_source() and a mid play meter change can land anywhere.
 var _grid_beat_in_bar: int = 0
+# Where on the grid the beat that was last emitted sits. Not where the clock was when it
+# noticed: the frame that emits a beat runs a fraction of a beat after the beat itself, and
+# what the re-anchor below needs is the beat, not the frame.
+var _last_beat_at: float = 0.0
 # Raw playback position last seen, used to notice a loop wrap.
 var _last_raw: float = 0.0
 # Completed loops of the current source.
@@ -260,6 +269,7 @@ func start(loop_length: float = 0.0) -> void:
 	_grid_at = 0.0
 	_grid_beat = 0
 	_grid_beat_in_bar = 0
+	_last_beat_at = 0.0
 	_last_raw = 0.0
 	_wraps = 0
 	_loop_length = maxf(0.0, loop_length)
@@ -329,9 +339,11 @@ func rebase(
 		# Nothing has been emitted at or past the boundary, so the next tick announces it.
 		beat_index = boundary_beat - 1
 		beat_in_bar = beats_per_bar - 1
+		_last_beat_at = position_of_beat(beat_index)
 		return
 
 	beat_in_bar = (beat_index - _grid_beat) % beats_per_bar
+	_last_beat_at = position_of_beat(beat_index)
 	if not downbeat_already_out:
 		bar_index += 1
 		bar.emit(bar_index)
@@ -354,6 +366,7 @@ func resync_source(source_position: float, loop_length: float) -> void:
 	_grid_at = _origin
 	_grid_beat = beat_index - beats_in
 	_grid_beat_in_bar = posmod(beat_in_bar - beats_in, beats_per_bar)
+	_last_beat_at = position_of_beat(beat_index)
 	_last_raw = source_position
 	_wraps = 0
 	_loop_length = maxf(0.0, loop_length)
@@ -614,6 +627,7 @@ func advance_to(raw: float) -> void:
 
 	while beat_index < target:
 		beat_index += 1
+		_last_beat_at = position_of_beat(beat_index)
 		beat_in_bar += 1
 		var downbeat := beat_in_bar >= beats_per_bar
 		if downbeat:
@@ -624,22 +638,30 @@ func advance_to(raw: float) -> void:
 			bar.emit(bar_index)
 
 
-# Moves the beat grid onto the position the music is at right now, keeping the counts where
-# they are. This is the arithmetic rebase() uses at a section boundary, with the boundary being
-# now and the stream underneath left alone.
+# Moves the beat grid onto the beat the music last emitted, keeping the counts where they are.
+# This is the arithmetic rebase() uses at a section boundary, with the boundary being the beat
+# that just went out and the stream underneath left alone.
 #
 # Without it a tempo written mid play left the grid anchored to the old tempo, and the beat the
 # new grid claimed the music was on jumped: doubling the tempo emitted the whole jump as a
 # burst of beats in one frame, halving it waited the jump out in silence, and skipped_beats
-# reported 0 either way. Only an actual change re-anchors, because moving the anchor to now on
-# every write would push the next beat one beat into the future every frame and no beat would
-# ever arrive.
+# reported 0 either way.
+#
+# The anchor is the last beat rather than the position of the write. Anchoring on the write is
+# right once, and wrong on every frame after the first: it puts the next beat a whole new tempo
+# beat past the write, so a second write a frame later puts it a whole beat past that one, and
+# a game ramping the tempo over consecutive frames, which is the obvious reason to write bpm
+# every frame at all, pushed the next beat away for the length of the ramp and heard nothing
+# while skipped_beats read 0. Pinned to the last beat the grid keeps the beat that is already
+# part way through, so a ramp emits beats at roughly the tempo it is passing through, and a
+# single write still puts the next beat one new beat after the one before it.
 func _reanchor_running_grid() -> void:
 	if not running or beat_index < 0:
 		# Nothing has been emitted yet, so there is no count to keep and the grid start() laid
 		# down is still the right one.
 		return
-	_grid_at = position
+	# A beat cannot have been emitted in the future, whatever grid it was emitted against.
+	_grid_at = minf(_last_beat_at, position)
 	_grid_beat = beat_index
 	# A meter that just got shorter can leave the beat of the bar past the end of the new bar.
 	# The bar finishes as soon as the new meter allows rather than claiming a downbeat here.

@@ -174,11 +174,15 @@ func test_a_tempo_written_after_a_transition_is_scheduled_does_not_move_its_bar(
 	var clock := _fresh(120.0, 4)
 	clock.start(LOOP_SECONDS)
 	_run_to(clock, 1, 100)
-	_bars.clear()
 
 	var boundary_beat := clock.next_boundary_beat(DivisiQuantize.NEXT_BAR)
 	var at := clock.next_boundary(DivisiQuantize.NEXT_BAR)
 	var announced := clock.landing_bar(at)
+	# Everything from here to the landing, so that the downbeat is counted once wherever it
+	# comes from. Speeding the music up pulls the boundary beat earlier than the position the
+	# transition was scheduled against, so the tick that crosses it announces the bar and the
+	# rebase must not announce it again; slowing down puts it the other way round.
+	_bars.clear()
 
 	# The game speeds the music up while the transition is still pending.
 	clock.bpm = 150.0
@@ -187,7 +191,6 @@ func test_a_tempo_written_after_a_transition_is_scheduled_does_not_move_its_bar(
 		frame += 1
 		clock.advance_to(float(frame) / 60.0)
 	var overshoot := clock.position - at
-	_bars.clear()
 	clock.rebase(at, overshoot, LOOP_SECONDS, 150.0, 4, boundary_beat)
 	# One more frame, read off the incoming stream the way the player reads it: a rebase moves
 	# the clock's origin onto the boundary, so what it is fed from here is the position inside
