@@ -166,41 +166,36 @@ func test_the_beat_a_boundary_is_asked_for_is_the_beat_it_reads_back_as() -> voi
 	assert_array(wrong).is_empty()
 
 
-func test_a_tempo_written_after_a_transition_is_scheduled_does_not_move_its_bar() -> void:
-	# The scheduler announces a bar when the transition is scheduled and lands it a frame or
-	# more later. A tempo write in between re-anchors the grid, so the position it scheduled
-	# against no longer names the beat it was scheduled for. Carrying the beat number through
-	# to the rebase is what keeps the two the same number.
-	var clock := _fresh(120.0, 4)
-	clock.start(LOOP_SECONDS)
-	_run_to(clock, 1, 100)
+func test_where_a_scheduled_boundary_falls_moves_with_the_tempo() -> void:
+	# The invariant the scheduler rests on. A boundary's identity is its beat number; the
+	# position that beat falls on is a question that has to be asked again once the tempo has
+	# changed, because the beat does not move and its position does. A scheduler that keeps the
+	# position it worked out when it scheduled is asking about a different instant, and that is
+	# what put a transition as much as two bars past the bar it announced.
+	#
+	# What is asserted here is only that the position follows the tempo and still reads back as
+	# the beat it was asked for. That the scheduler asks again is asserted where the scheduler
+	# is, in divisi_player_boundary_test.gd.
+	var faster := _fresh(120.0, 4)
+	faster.start(LOOP_SECONDS)
+	_run_to(faster, 1, 100)
+	var boundary_beat := faster.next_boundary_beat(DivisiQuantize.NEXT_BAR)
+	var at_the_old_tempo := faster.position_of_beat(boundary_beat)
+	assert_float(faster.next_boundary(DivisiQuantize.NEXT_BAR)).is_equal_approx(
+		at_the_old_tempo, 0.000001
+	)
 
-	var boundary_beat := clock.next_boundary_beat(DivisiQuantize.NEXT_BAR)
-	var at := clock.next_boundary(DivisiQuantize.NEXT_BAR)
-	var announced := clock.landing_bar(at)
-	# Everything from here to the landing, so that the downbeat is counted once wherever it
-	# comes from. Speeding the music up pulls the boundary beat earlier than the position the
-	# transition was scheduled against, so the tick that crosses it announces the bar and the
-	# rebase must not announce it again; slowing down puts it the other way round.
-	_bars.clear()
+	faster.bpm = 240.0
+	assert_float(faster.position_of_beat(boundary_beat)).is_less(at_the_old_tempo)
+	assert_int(faster.beat_at(faster.position_of_beat(boundary_beat))).is_equal(boundary_beat)
+	faster.free()
 
-	# The game speeds the music up while the transition is still pending.
-	clock.bpm = 150.0
-	var frame := 100
-	while clock.position < at:
-		frame += 1
-		clock.advance_to(float(frame) / 60.0)
-	var overshoot := clock.position - at
-	clock.rebase(at, overshoot, LOOP_SECONDS, 150.0, 4, boundary_beat)
-	# One more frame, read off the incoming stream the way the player reads it: a rebase moves
-	# the clock's origin onto the boundary, so what it is fed from here is the position inside
-	# the new stream, which starts at the overshoot. The write moved the grid, so the beat the
-	# boundary was scheduled for is still a frame away, and it is that beat, not whichever one
-	# the stale boundary position now points at, that carries the downbeat.
-	clock.advance_to(overshoot + 1.0 / 60.0)
+	var slower := _fresh(120.0, 4)
+	slower.start(LOOP_SECONDS)
+	_run_to(slower, 1, 100)
+	assert_int(slower.next_boundary_beat(DivisiQuantize.NEXT_BAR)).is_equal(boundary_beat)
 
-	assert_int(clock.beat_index).is_equal(boundary_beat)
-	assert_int(clock.bar_index).is_equal(announced)
-	assert_int(clock.beat_in_bar).is_equal(0)
-	assert_array(_bars).is_equal([announced])
-	clock.free()
+	slower.bpm = 60.0
+	assert_float(slower.position_of_beat(boundary_beat)).is_greater(at_the_old_tempo)
+	assert_int(slower.beat_at(slower.position_of_beat(boundary_beat))).is_equal(boundary_beat)
+	slower.free()

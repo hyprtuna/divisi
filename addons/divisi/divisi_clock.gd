@@ -329,9 +329,20 @@ func rebase(
 	# announced then and the bar the music lands in now are the same number even if a tempo
 	# write moved the grid in between. -1 asks for it to be read off at_position instead.
 	var boundary_beat := beat_at(at_position) if at_beat < 0 else at_beat
-	# Whether the tick just before this call announced the boundary as a downbeat, which is
-	# what a NEXT_BAR transition does. If it did, announcing it again is a duplicate.
-	var downbeat_already_out := beat_index == boundary_beat and beat_in_bar == 0
+	# Whether a bar has already gone out for the boundary beat, which is what the tick before
+	# this call does when the boundary is a downbeat on the outgoing grid. Announcing it again
+	# would be a duplicate.
+	#
+	# Asked of the grid rather than of beat_index, because the boundary beat is not always the
+	# last one emitted. A tempo written while the transition was pending can move the boundary
+	# into the past, and then the tick that crosses it emits the boundary beat and the beats
+	# after it together; the downbeat still went out. This is the same test landing_bar() uses
+	# to decide whether the boundary needs a bar of its own, so the bar it announced and the
+	# bar this lands in cannot disagree.
+	var downbeat_already_out := (
+		beat_index >= boundary_beat
+		and posmod(boundary_beat - _grid_beat + _grid_beat_in_bar, beats_per_bar) == 0
+	)
 
 	if new_bpm > 0.0:
 		bpm = new_bpm

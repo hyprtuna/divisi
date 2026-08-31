@@ -118,21 +118,27 @@ var _idle: AudioStreamPlayer = null
 var _active_section: DivisiSection = null
 var _idle_section: DivisiSection = null
 
-# Musical position a scheduled transition fires at, and the beat that position is the
-# position of. The beat is what the announced bar was derived from, and it is handed back to
-# the clock at the rebase so the bar the music lands in is the bar the announcement named,
-# whatever was written to the tempo in between.
+# The beat a scheduled transition fires on, and how it was quantized.
+#
+# A scheduled boundary's identity is its beat number, not a position. Writing the tempo moves
+# where that beat falls, so a position frozen when the transition was scheduled stops naming
+# the beat it was scheduled for: see _boundary_position. _pending_at is the position the
+# boundary was scheduled at, kept only for DivisiQuantize.NOW, which is not a beat.
 var _pending_at: float = 0.0
 var _pending_beat: int = 0
+var _pending_quantize: DivisiQuantize.Mode = DivisiQuantize.NEXT_BAR
 # Crossfade in progress: seconds elapsed, and its total length. _fade_seconds of 0 means no
 # fade is running.
 var _fade_elapsed: float = 0.0
 var _fade_seconds: float = 0.0
 var _fading: bool = false
 
-# Stinger scheduled but not yet fired.
+# Stinger scheduled but not yet fired, on the same terms as a pending transition: the beat is
+# the identity, the position is derived from it.
 var _stinger_stream: AudioStream = null
 var _stinger_at: float = 0.0
+var _stinger_beat: int = 0
+var _stinger_quantize: DivisiQuantize.Mode = DivisiQuantize.NEXT_BEAT
 var _stinger_pending: bool = false
 # Duck applied to the music while a stinger plays. 0.0 when nothing is ducking.
 var _duck_db: float = 0.0
@@ -274,6 +280,7 @@ func transition_to(
 		return false
 
 	pending_section = section
+	_pending_quantize = quantize
 	_pending_beat = clock.next_boundary_beat(quantize)
 	_pending_at = clock.next_boundary(quantize)
 	transition_started.emit(
@@ -337,6 +344,8 @@ func play_stinger(
 		push_error("divisi: play_stinger needs the music running, so there is a beat to land on.")
 		return false
 	_stinger_stream = stream
+	_stinger_quantize = quantize
+	_stinger_beat = clock.next_boundary_beat(quantize)
 	_stinger_at = clock.next_boundary(quantize)
 	_stinger_pending = true
 	var depth_db := duck_db
@@ -518,11 +527,36 @@ func _cancel_pending() -> void:
 	_stinger_stream = null
 
 
+# Where a boundary that was scheduled on [param beat] sits now.
+#
+# The beat is the boundary's identity and the position is worked out from it every time it is
+# needed, because a tempo written between scheduling and landing moves the beat: the bar the
+# transition was scheduled for arrives sooner at a faster tempo and later at a slower one, and
+# a position frozen at schedule time names neither. Freezing it made the music land up to two
+# bars past the bar that was announced, off the downbeat, with the beat signal silent for as
+# much as eight beats while the clock caught up with a boundary it had already passed.
+#
+# DivisiQuantize.NOW is not a beat. It means this instant, and the instant it meant is the one
+# it was asked at, so that one is kept.
+func _boundary_position(beat: int, quantize: DivisiQuantize.Mode, scheduled_at: float) -> float:
+	if quantize == DivisiQuantize.NOW:
+		return scheduled_at
+	return clock.position_of_beat(beat)
+
+
 func _fire_due_work() -> void:
-	if pending_section != null and clock.position >= _pending_at:
+	if pending_section != null and clock.position >= _pending_boundary_at():
 		_fire_transition()
-	if _stinger_pending and clock.position >= _stinger_at:
+	if _stinger_pending and clock.position >= _stinger_boundary_at():
 		_fire_stinger()
+
+
+func _pending_boundary_at() -> float:
+	return _boundary_position(_pending_beat, _pending_quantize, _pending_at)
+
+
+func _stinger_boundary_at() -> float:
+	return _boundary_position(_stinger_beat, _stinger_quantize, _stinger_at)
 
 
 func _fire_transition() -> void:
@@ -532,7 +566,8 @@ func _fire_transition() -> void:
 	# The boundary passed somewhere inside the frame that just ran. Starting the incoming
 	# stream at that overshoot rather than at zero puts its first sample back on the boundary,
 	# so the section is in phase even though the frame noticed late.
-	var overshoot := maxf(0.0, clock.position - _pending_at)
+	var boundary_at := _pending_boundary_at()
+	var overshoot := maxf(0.0, clock.position - boundary_at)
 	var loop_length := section.loop_length()
 	if loop_length > 0.0:
 		overshoot = fposmod(overshoot, loop_length)
@@ -559,7 +594,7 @@ func _fire_transition() -> void:
 
 	clock.player = _active
 	clock.rebase(
-		_pending_at, overshoot, loop_length, section.bpm, section.beats_per_bar, _pending_beat
+		boundary_at, overshoot, loop_length, section.bpm, section.beats_per_bar, _pending_beat
 	)
 
 	_fade_seconds = maxf(0.0, transition_seconds)
@@ -573,7 +608,7 @@ func _fire_transition() -> void:
 
 func _fire_stinger() -> void:
 	_stinger_pending = false
-	var overshoot := maxf(0.0, clock.position - _stinger_at)
+	var overshoot := maxf(0.0, clock.position - _stinger_boundary_at())
 	var length := _stinger_stream.get_length()
 	_stinger_player.stream = _stinger_stream
 	_stinger_player.volume_db = volume_db
