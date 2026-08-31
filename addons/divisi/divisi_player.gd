@@ -420,6 +420,14 @@ func layer_gains() -> Array[Dictionary]:
 
 
 ## Everything needed to pick this player up again in another scene. See [DivisiState].
+##
+## A scheduled transition and a scheduled stinger are not part of it. Those are work this
+## player was about to do rather than state the music is in, and the beat each was scheduled
+## for belongs to the run being left: by the time a save comes back the music has been stopped
+## and dropped in again somewhere else, and a boundary counted against the old run names
+## nothing in the new one. [method restore_state] cancels both, so nothing fires late over
+## restored music and nothing is announced for work that never happened. Schedule again after
+## restoring if the game still wants it.
 func capture_state() -> Dictionary:
 	if not playing or current_section == null or clock == null:
 		return {}
