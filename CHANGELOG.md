@@ -7,6 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-09-01
+
+The round that closes what 0.1.3 left open. Everything here is a beat or bar
+signal behaving the way the counts already did; no API changed shape, and the
+only new method on the clock exists so the player can hold it at a boundary.
+
+### Fixed
+
+- **A section change no longer opens with the beat signal silent.** Writing a
+  large tempo change while a transition is pending moves the beat that
+  transition was scheduled for into the past, and the frame that noticed had
+  the boundary beat and the beats behind it to emit at once, at the tempo just
+  written, before the incoming section was underneath them. The incoming grid
+  then had to wait through beats it had never reached: at a 120 to 400 BPM
+  write, the widest the inspector hint suggests, over two beats of nothing at
+  the top of the new section, with `skipped_beats` reading 0 throughout. The
+  clock is now held at a scheduled boundary, so those beats come out on the
+  incoming section's own grid, where a listener hears them. A 180 point sweep
+  through the real scheduler reads clean on every property it checks.
+
+- **A rebase asks what was announced rather than what the grid says now.**
+  Whether the boundary's downbeat had already gone out was read off the beat
+  grid as it stood at the moment of the landing. A meter written between that
+  beat going out and the landing moves the grid out from under it, and at a bar
+  of one, where every position is a downbeat, the grid then claimed a bar had
+  gone out for a beat that was never told it was one: the bar nobody had
+  announced was never announced. The clock now records which beat each bar
+  actually went out on and asks that.
+
+- **A landing announces only its own bar.** `rebase()` wrote the incoming
+  tempo and meter through their setters into a running clock, which is a mid
+  play change: an incoming meter shorter than the beat of the bar the outgoing
+  section was on announced the bar that closes, off the grid being replaced and
+  carrying an index counted from the section being left. `play()` and
+  `restore_state()` have stopped the clock over those two writes since 0.1.3;
+  now so does the landing.
+
+- **A refused meter that is not a number reads the same on both supported
+  Godot versions.** `beats_per_bar` is an int, so a meter written as `NAN` or
+  `INF` reaches the setter as the smallest 64 bit integer, and Godot 4.4 prints
+  that value with two minus signs. The refusal said
+  `Refusing --9223372036854775808` on one version and
+  `Refusing -9223372036854775808` on the other. It now names the value instead
+  of printing it, and a meter somebody really did write is still printed.
+
+### Changed
+
+- `DivisiClock.hold_beats_at()` holds beat emission at a given beat, so that a
+  scheduler with work waiting on that beat can do it before the beats behind it
+  go out. `DivisiPlayer` uses it for the boundary of a pending transition and
+  lifts it when the transition lands or is cancelled. Held beats are not
+  dropped and are not counted in `skipped_beats`.
+
+- `capture_state()` documents what it does with work that was waiting. A
+  scheduled transition and a scheduled stinger are not part of the state, and
+  `restore_state()` cancels both rather than firing them over restored music.
+  This is what it already did, said out loud and covered by a test.
+
+- CI counts test suites rather than `.gd` files under `test/`, so the check
+  that every suite was discovered on every Godot version keeps catching a suite
+  skipped for a parse error without failing the build the day a shared helper
+  lands beside them.
+
+- The demo capture and readout images in `docs/` were reshot from this
+  version's code. They still showed the readout line as it was written before
+  0.1.1. Nothing in the packaged addon changed.
+
 ## [0.1.3] - 2026-08-31
 
 Two regressions from 0.1.2 and the edges around them. 0.1.2 made a transition
@@ -299,7 +366,8 @@ the scheduling that clock makes possible.
   gdUnit4 headless tests on both supported Godot versions, and a check that
   no em or en dash appears anywhere in the repository.
 
-[Unreleased]: https://github.com/hyprtuna/divisi/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/hyprtuna/divisi/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/hyprtuna/divisi/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/hyprtuna/divisi/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/hyprtuna/divisi/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/hyprtuna/divisi/compare/v0.1.0...v0.1.1
