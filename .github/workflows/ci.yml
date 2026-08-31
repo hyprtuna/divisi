@@ -113,15 +113,21 @@ jobs:
       # only thing that showed it was comparing the case counts by hand. A leg
       # that quietly runs fewer suites than the repository holds is not testing
       # what it claims to, so the count is checked rather than assumed.
+      #
+      # What is counted is suites, not files. gdUnit4 discovers a suite by the
+      # class it extends, so that is what this asks for too: a helper script
+      # added under test/ one day is not a suite, and must not fail the build
+      # for not being one.
       - name: every test suite was discovered
         run: |
-          want=$(git ls-files 'test/*.gd' | wc -l)
+          want=$(git ls-files 'test/*.gd' |
+            xargs -r grep -lE '^extends GdUnitTestSuite' | wc -l)
           got=$(sed 's/\x1b\[[0-9;]*m//g' "${RUNNER_TEMP}/gdunit.log" |
             grep -oE 'Executed test suites: \([0-9]+/[0-9]+\)' | tail -1 |
             grep -oE '[0-9]+' | head -1)
           echo "test suites in the repository: $want, discovered by gdUnit4: ${got:-none}"
           if [ "${got:-0}" -ne "$want" ]; then
-            echo "gdUnit4 ran ${got:-0} suites, but test/ holds $want files."
+            echo "gdUnit4 ran ${got:-0} suites, but test/ holds $want of them."
             echo "A suite that fails to parse is skipped in silence; the parse"
             echo "error is in the test step's log above."
             exit 1
