@@ -121,7 +121,9 @@ var _stinger_at: float = 0.0
 var _stinger_pending: bool = false
 # Duck applied to the music while a stinger plays. 0.0 when nothing is ducking.
 var _duck_db: float = 0.0
-var _duck_hold_until: float = 0.0
+# Seconds of the stinger still to run. Counted down in wall seconds, not in musical time: see
+# _advance_duck.
+var _duck_hold_remaining: float = 0.0
 var _duck_release_seconds: float = 0.25
 var _duck_release_from_db: float = 0.0
 var _duck_release_elapsed: float = 0.0
@@ -281,6 +283,15 @@ func cancel_transition() -> bool:
 ## compression: nothing analyses the stinger's envelope, and the music does not breathe with
 ## it. Pass 0.0 for no duck. Only one stinger can be scheduled at a time; a second call before
 ## the boundary replaces the first.
+##
+## A duck only ever lowers the music. A positive [param duck_db] is ignored, with a warning,
+## rather than raising it. The dip stops at [constant DivisiClock.SILENCE_DB], the same floor
+## the layer gains use, so a very large one is silence rather than a number the audio server
+## has to make sense of.
+##
+## The duck is held for the length of the stinger and then released, and both are counted in
+## plain seconds rather than in musical time. The stinger has its own player, so pausing the
+## music does not pause it, and a hold measured against a stopped clock would never end.
 func play_stinger(
 	stream: AudioStream,
 	quantize: DivisiQuantize.Mode = DivisiQuantize.NEXT_BEAT,
@@ -296,7 +307,17 @@ func play_stinger(
 	_stinger_stream = stream
 	_stinger_at = clock.next_boundary(quantize)
 	_stinger_pending = true
-	_pending_duck_db = minf(0.0, duck_db)
+	if duck_db > 0.0:
+		push_warning(
+			(
+				(
+					"divisi: play_stinger was given duck_db %+f, which would raise the music "
+					+ "rather than duck it. Ignoring it."
+				)
+				% duck_db
+			)
+		)
+	_pending_duck_db = clampf(duck_db, DivisiClock.SILENCE_DB, 0.0)
 	_pending_duck_release = maxf(0.0, release_seconds)
 	return true
 
@@ -433,7 +454,9 @@ func _stop_players() -> void:
 	_fading = false
 	_fade_seconds = 0.0
 	_ducking = false
+	_duck_releasing = false
 	_duck_db = 0.0
+	_duck_hold_remaining = 0.0
 
 
 func _cancel_pending() -> void:
@@ -505,7 +528,7 @@ func _fire_stinger() -> void:
 		_duck_releasing = false
 		_duck_db = _pending_duck_db
 		_duck_release_seconds = _pending_duck_release
-		_duck_hold_until = clock.position + maxf(0.0, length - overshoot)
+		_duck_hold_remaining = maxf(0.0, length - overshoot)
 		_apply_volumes()
 	stinger_started.emit()
 
@@ -533,7 +556,13 @@ func _advance_duck(delta: float) -> void:
 	if not _ducking:
 		return
 	if not _duck_releasing:
-		if clock.position < _duck_hold_until:
+		# Counted in the seconds the release ramp below already uses, not in musical time. The
+		# stinger plays on its own player, so pausing the music stops the clock without
+		# stopping the stinger, and a hold measured against a stopped clock never ends: a
+		# paused stream used to leave the music 18 dB down for the whole pause and bring it
+		# back only afterwards.
+		_duck_hold_remaining -= delta
+		if _duck_hold_remaining > 0.0:
 			return
 		_duck_releasing = true
 		_duck_release_from_db = _duck_db
