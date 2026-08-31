@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-08-31
+
+Two regressions from 0.1.2 and the edges around them. 0.1.2 made a transition
+land in the bar it announced when the tempo was written before the transition
+was scheduled; this round makes it hold when the tempo is written after, which
+0.1.2 got worse rather than better. Nothing in the API changed shape.
+
+### Fixed
+
+- **A tempo written after a transition is scheduled no longer moves where it
+  lands.** `transition_to()` worked out the position of the boundary it
+  scheduled and kept that number, but a boundary's identity is its beat, and
+  writing the tempo moves where that beat falls: the bar arrives sooner at a
+  faster tempo and later at a slower one. The scheduler went on waiting for the
+  old position, so the music landed as much as two bars past the bar
+  `transition_started` had announced, off the downbeat, with the beat signal
+  silent for up to eight beats while the clock caught up with a boundary it had
+  already crossed. Eight beats at 400 BPM is 1.2 seconds of nothing immediately
+  after a section change. A sweep of 180 warm-up and tempo pairs through the
+  real scheduler goes from 119 failures to none.
+
+- **A stinger scheduled on a bar line lands on that beat when the tempo moves
+  under it.** The same staleness, carried since stingers could be quantized at
+  all: scheduled for beat 4 and overtaken by a tempo write it fired on beat 5,
+  9 or 3 depending on the new tempo.
+
+- **`rebase()` and `landing_bar()` answer from the same test.** Whether the
+  boundary downbeat has already gone out is asked of the beat grid rather than
+  by comparing the last beat emitted to the boundary, because a tempo write can
+  move the boundary into the past and then one frame emits the boundary beat
+  and the beats after it together. The two cannot disagree about the bar now.
+
+- **Loading a save or a section no longer announces a bar that never sounded.**
+  `restore_state()` writes the saved tempo and meter into a clock that is still
+  running with the outgoing state, which reads as a mid play meter change and
+  closes a bar: restoring a save taken in a bar of one over a live bar of four
+  made the bar count go 0, 1, then 41. `play()` had the same defect on the path
+  a game takes far more often. Both stop the clock before they write, and a
+  meter change the music really did perform still announces the bar it closes.
+
+- **The stinger duck ends when `Engine.time_scale` is 0.0.** A game that pauses
+  by stopping time rather than by pausing the tree hands `_process` a delta of
+  zero forever. Counted in wall seconds since 0.1.2, this already worked; there
+  is a case on it now.
+
+- **A refused tempo of `-0.0` is named as `-0.0` in its warning.** The warning
+  quoted `0.0`, because rendering a float as a string drops the sign, so it
+  named a value that would not have been refused.
+
+### Changed
+
+- CI checks that every test suite was discovered on every Godot version, not
+  just that the tests which ran passed. A suite that fails to parse is skipped
+  by gdUnit4 with a clean exit, and a type expression that one supported Godot
+  version accepts and the other rejects put the two legs four cases apart with
+  both of them green.
+
 ## [0.1.2] - 2026-08-31
 
 The round that follows 0.1.1's tempo work. Writing `bpm` while the music runs
@@ -242,7 +299,8 @@ the scheduling that clock makes possible.
   gdUnit4 headless tests on both supported Godot versions, and a check that
   no em or en dash appears anywhere in the repository.
 
-[Unreleased]: https://github.com/hyprtuna/divisi/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/hyprtuna/divisi/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/hyprtuna/divisi/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/hyprtuna/divisi/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/hyprtuna/divisi/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/hyprtuna/divisi/releases/tag/v0.1.0
