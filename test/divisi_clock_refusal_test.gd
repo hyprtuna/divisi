@@ -115,6 +115,17 @@ func test_a_restored_meter_too_long_to_be_a_bar_is_refused() -> void:
 	assert_int(_clock.beats_per_bar).is_equal(4)
 
 
+func test_the_warning_for_a_refused_negative_zero_names_what_it_refused() -> void:
+	# -0.0 is refused, correctly, but str() renders it as "0.0", so the warning named a tempo
+	# of zero when what arrived carried a sign. A warning exists to be acted on, and the value
+	# it quotes has to be the value that was there.
+	var restore := func() -> void: _clock.from_dict({"bpm": -0.0})
+	await (assert_error(restore).is_push_warning(
+		"divisi: restored state has bpm -0.000000, which is not a tempo. Keeping 120.000000."
+	))
+	assert_float(_clock.bpm).is_equal_approx(120.0, 0.000001)
+
+
 func test_a_restored_tempo_that_is_not_a_number_at_all_is_refused() -> void:
 	# true read as a float is 1.0, which is a legal tempo of one beat a minute, so nothing
 	# downstream could tell that the save did not hold a number.

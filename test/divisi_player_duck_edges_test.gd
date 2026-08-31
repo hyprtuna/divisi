@@ -69,6 +69,26 @@ func test_a_duck_is_over_in_wall_seconds_when_the_engine_is_slowed_down(timeout 
 	assert_float(wall).is_less(STINGER.get_length() + release + 1.0)
 
 
+func test_a_duck_still_ends_when_the_engine_is_stopped_dead(timeout := 40000) -> void:
+	# Engine.time_scale = 0.0 is a pause a game implements itself rather than through the scene
+	# tree, and it hands _process a delta of zero on every frame. A hold counted in frame time
+	# never advances at all there: the music stayed 18 dB down for as long as anything was
+	# willing to wait, which is the same never-ends failure a hold measured against a stopped
+	# musical clock had. The wall clock does not stop when the engine's does.
+	_player.play(&"explore")
+	await get_tree().create_timer(0.3).timeout
+	var music := _music()
+	var release := 0.25
+
+	Engine.time_scale = 0.0
+	_player.play_stinger(STINGER, DivisiQuantize.NOW, -18.0, release)
+	await _player.stinger_started
+	assert_float(music.volume_db).is_less(_player.volume_db - 1.0)
+
+	var wall: float = await _wall_seconds_until_released(music, 20.0)
+	assert_float(wall).is_less(STINGER.get_length() + release + 1.0)
+
+
 func test_a_release_that_is_not_a_number_is_refused(timeout := 20000) -> void:
 	# maxf(0.0, NAN) is NAN, and _duck_release_seconds <= 0.0 is false for it, so the ramp's
 	# own t was NAN, the depth was NAN, and is_zero_approx(NAN) is false: the duck never

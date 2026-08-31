@@ -95,11 +95,37 @@ jobs:
       # Exit codes come from the cmd tool: 0 all tests passed, 100 the run
       # ended in test failures, 101 warnings only. The step after this one
       # checks that contract on every run rather than taking it on trust.
+      # pipefail because the output is teed to a file for the step after this
+      # one: without it the pipeline reports tee's exit code and a failing test
+      # run would pass this step.
       - name: gdUnit4 headless tests
         run: |
+          set -o pipefail
           godot --headless --path . -d --remote-debug tcp://127.0.0.1:0 \
             -s res://addons/gdUnit4/bin/GdUnitCmdTool.gd \
-            -a test --ignoreHeadlessMode
+            -a test --ignoreHeadlessMode | tee "${RUNNER_TEMP}/gdunit.log"
+
+      # A suite that does not parse is not a failure to gdUnit4. It logs the
+      # parse error, skips the file and carries on to a clean exit. That has
+      # already happened once here, on one leg only, because a type expression
+      # Godot 4.7 accepts is an error on 4.4: the run was green on both legs
+      # with one file's worth of cases never executed on one of them, and the
+      # only thing that showed it was comparing the case counts by hand. A leg
+      # that quietly runs fewer suites than the repository holds is not testing
+      # what it claims to, so the count is checked rather than assumed.
+      - name: every test suite was discovered
+        run: |
+          want=$(git ls-files 'test/*.gd' | wc -l)
+          got=$(sed 's/\x1b\[[0-9;]*m//g' "${RUNNER_TEMP}/gdunit.log" |
+            grep -oE 'Executed test suites: \([0-9]+/[0-9]+\)' | tail -1 |
+            grep -oE '[0-9]+' | head -1)
+          echo "test suites in the repository: $want, discovered by gdUnit4: ${got:-none}"
+          if [ "${got:-0}" -ne "$want" ]; then
+            echo "gdUnit4 ran ${got:-0} suites, but test/ holds $want files."
+            echo "A suite that fails to parse is skipped in silence; the parse"
+            echo "error is in the test step's log above."
+            exit 1
+          fi
 
       # This whole job rests on a failing test producing a non-zero exit. A
       # gdUnit4 release that reported failures and still exited 0 would leave
