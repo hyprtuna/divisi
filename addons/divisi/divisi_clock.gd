@@ -445,10 +445,13 @@ func from_dict(state: Dictionary) -> void:
 				)
 			)
 		elif not is_finite(float(restored_bpm)) or float(restored_bpm) <= 0.0:
+			# %f rather than %s: str() renders -0.0 as "0.0", so a warning about a refused -0.0
+			# named a value that would not have been refused. %f keeps the sign, and still
+			# renders a non-finite tempo as "inf" or "nan".
 			push_warning(
 				(
-					"divisi: restored state has bpm %s, which is not a tempo. Keeping %f."
-					% [restored_bpm, bpm]
+					"divisi: restored state has bpm %f, which is not a tempo. Keeping %f."
+					% [float(restored_bpm), bpm]
 				)
 			)
 		else:
