@@ -180,13 +180,28 @@ func test_a_stinger_without_a_duck_does_not_strand_an_earlier_one(timeout := 200
 	# The duck depth used to be written at schedule time and read by the release ramp, so a
 	# second stinger scheduled with the default duck of 0 while the first was still releasing
 	# set the release rate to zero. The music stayed 9.5 dB down for the rest of the run.
+	#
+	# Only a second call that lands inside that release reaches the bug: the release opens
+	# when the stinger ends and closes one release_seconds later. So the wait is derived from
+	# the stinger's own length rather than written as a literal that a longer or shorter
+	# stinger would put outside the window, and the test asserts it really is inside the
+	# release before making the call. A wait that drifts past the window passes against the
+	# defect it is supposed to catch, which is worse than no test.
+	var depth_db := -12.0
+	var release := 0.25
 	_player.play(&"explore")
 	await get_tree().create_timer(0.3).timeout
-	_player.play_stinger(STINGER, DivisiQuantize.NEXT_BEAT, -12.0, 0.25)
-	await get_tree().create_timer(1.9).timeout
+	var music := _player.get_node(^"DivisiMusicA") as AudioStreamPlayer
+	_player.play_stinger(STINGER, DivisiQuantize.NEXT_BEAT, depth_db, release)
+	await _player.stinger_started
+	await get_tree().create_timer(STINGER.get_length() + release * 0.5).timeout
+
+	# Below the base level, but no longer at the full depth: the release is under way.
+	assert_float(music.volume_db).is_less(_player.volume_db)
+	assert_float(music.volume_db).is_greater(_player.volume_db + depth_db)
+
 	_player.play_stinger(STINGER, DivisiQuantize.NEXT_BEAT)
 	await get_tree().create_timer(3.0).timeout
-	var music := _player.get_node(^"DivisiMusicA") as AudioStreamPlayer
 	assert_float(music.volume_db).is_equal_approx(_player.volume_db, 0.01)
 
 

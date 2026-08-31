@@ -93,13 +93,39 @@ jobs:
       # that is deliberate.
       #
       # Exit codes come from the cmd tool: 0 all tests passed, 100 the run
-      # ended in test failures, 101 warnings only. Verified by hand on both
-      # legs, with a deliberately failing test, which exited 100.
+      # ended in test failures, 101 warnings only. The step after this one
+      # checks that contract on every run rather than taking it on trust.
       - name: gdUnit4 headless tests
         run: |
           godot --headless --path . -d --remote-debug tcp://127.0.0.1:0 \
             -s res://addons/gdUnit4/bin/GdUnitCmdTool.gd \
             -a test --ignoreHeadlessMode
+
+      # This whole job rests on a failing test producing a non-zero exit. A
+      # gdUnit4 release that reported failures and still exited 0 would leave
+      # the gate green forever and nothing else here would notice, so the
+      # contract is exercised directly: a copy of the project with one
+      # deliberately failing test in it has to exit 100. The copy is thrown
+      # away, so nothing it does can reach the real tree.
+      - name: a failing test really fails the run
+        run: |
+          work="${RUNNER_TEMP}/failcheck"
+          rm -rf "$work"
+          mkdir -p "$work"
+          tar -c --exclude=.git --exclude=reports . | tar -x -C "$work"
+          printf 'extends GdUnitTestSuite\n\n\nfunc test_a_deliberate_failure_is_reported_as_one() -> void:\n\tassert_int(1).is_equal(2)\n' \
+            > "$work/test/deliberate_failure_test.gd"
+          set +e
+          godot --headless --path "$work" -d --remote-debug tcp://127.0.0.1:0 \
+            -s res://addons/gdUnit4/bin/GdUnitCmdTool.gd \
+            -a test/deliberate_failure_test.gd --ignoreHeadlessMode
+          code=$?
+          set -e
+          rm -rf "$work"
+          if [ "$code" -ne 100 ]; then
+            echo "a deliberately failing test exited $code, want 100"
+            exit 1
+          fi
 
       # plugin.cfg is the one file Godot itself reads to enable the addon, so
       # its absence or a malformed version is worth catching on every PR
