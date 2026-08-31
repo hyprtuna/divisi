@@ -96,14 +96,8 @@ func _readout() -> String:
 		lines.append("next      %s" % String(player.pending_section.section_name))
 	lines.append(
 		(
-			"bar:beat   [color=#9ee0ff]%d:%d[/color]    %.1f BPM  %d/%d"
-			% [
-				clock.bar_index,
-				clock.beat_in_bar,
-				clock.bpm,
-				clock.beats_per_bar,
-				clock.beats_per_bar
-			]
+			"bar:beat   [color=#9ee0ff]%d:%d[/color]    %.1f BPM  %s"
+			% [clock.bar_index, clock.beat_in_bar, clock.bpm, _meter(clock.beats_per_bar)]
 		)
 	)
 	lines.append("position   %s" % _timecode(clock.position))
@@ -120,12 +114,21 @@ func _readout() -> String:
 		var name_text := String(gain["name"])
 		if name_text.is_empty():
 			name_text = "layer"
-		lines.append("  %-9s %s %+6.1f dB" % [name_text, _meter(db), db])
+		lines.append("  %-9s %s %+6.1f dB" % [name_text, _level_bar(db), db])
 	return "\n".join(lines)
 
 
+# How many beats are in a bar, said rather than written as a time signature. This line used to
+# print beats_per_bar as both the numerator and the denominator, so 3/4 read as "3/3" and 7/4
+# as "7/7", correct only in 4/4. A DivisiClock carries a tempo and a number of beats, and no
+# note value at all, so the denominator was never knowable and inventing one was worse than
+# leaving it out.
+static func _meter(beats_per_bar: int) -> String:
+	return "1 beat/bar" if beats_per_bar == 1 else "%d beats/bar" % beats_per_bar
+
+
 # A level as a short bar of blocks, so four layers moving together are readable at a glance.
-static func _meter(db: float) -> String:
+static func _level_bar(db: float) -> String:
 	var amount := 0.0 if db <= DivisiClock.SILENCE_DB else db_to_linear(db)
 	var filled := clampi(roundi(amount * 10.0), 0, 10)
 	return "%s%s" % ["#".repeat(filled), ".".repeat(10 - filled)]
