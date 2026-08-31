@@ -199,3 +199,54 @@ func test_where_a_scheduled_boundary_falls_moves_with_the_tempo() -> void:
 	assert_float(slower.position_of_beat(boundary_beat)).is_greater(at_the_old_tempo)
 	assert_int(slower.beat_at(slower.position_of_beat(boundary_beat))).is_equal(boundary_beat)
 	slower.free()
+
+
+func test_a_rebase_announces_a_downbeat_a_meter_change_left_unannounced() -> void:
+	# Whether the boundary's downbeat has already gone out is a question about the past, and
+	# reading it off the grid as it stands now gets it wrong as soon as a meter is written
+	# between that beat going out and the rebase. The grid moves out from under the beat, and
+	# at a bar of one, where every position is a downbeat, it then answers that a bar went out
+	# for a beat that was never told it was one. Nobody hears the bar the rebase owes.
+	var clock := _fresh(120.0, 2)
+	clock.start(LOOP_SECONDS)
+	_bars.clear()
+	# Nine beats of two four: bars go out on the even beats, so beat 3 carried none.
+	_run_to(clock, 1, 245)
+	assert_int(clock.beat_index).is_equal(8)
+	assert_array(_bars).is_equal([0, 1, 2, 3, 4])
+
+	var boundary_beat := 3
+	var at := clock.position_of_beat(boundary_beat)
+	# The meter change lands between the beat that never carried a bar and the rebase onto it.
+	clock.beats_per_bar = 1
+	_bars.clear()
+
+	clock.rebase(at, clock.position - at, LOOP_SECONDS, 120.0, 1, boundary_beat)
+
+	# Exactly one, for the downbeat beat 3 never carried.
+	assert_array(_bars).has_size(1)
+	assert_int(_bars[0]).is_equal(clock.bar_index)
+	assert_int(clock.beat_in_bar).is_equal(0)
+	clock.free()
+
+
+func test_a_rebase_stays_silent_on_a_downbeat_that_already_went_out() -> void:
+	# The other side of the same question, and the reason the record is asked rather than
+	# assumed: a rebase onto a beat that did carry its own bar must stay silent.
+	var clock := _fresh(120.0, 4)
+	clock.start(LOOP_SECONDS)
+	_bars.clear()
+	# Five beats: beat 4 is a downbeat and carried bar 1 when it went out.
+	_run_to(clock, 1, 140)
+	assert_int(clock.beat_index).is_equal(4)
+	assert_int(clock.beat_in_bar).is_equal(0)
+
+	var boundary_beat := clock.beat_index
+	var at := clock.position_of_beat(boundary_beat)
+	_bars.clear()
+
+	clock.rebase(at, clock.position - at, LOOP_SECONDS, 120.0, 4, boundary_beat)
+
+	assert_array(_bars).is_empty()
+	assert_int(clock.bar_index).is_equal(1)
+	clock.free()

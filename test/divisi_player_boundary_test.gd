@@ -216,3 +216,39 @@ func test_a_transition_taken_now_is_not_pushed_onto_a_beat() -> void:
 	assert_float(player.clock.source_position).is_less(1.0 / 30.0)
 	assert_float(at).is_greater(0.0)
 	player.free()
+
+
+func test_a_transition_into_a_bar_of_one_lands_in_the_bar_it_announced() -> void:
+	# The landing writes the incoming section's tempo and meter into the clock, and on a clock
+	# that is still running those are mid play writes. A meter of one is shorter than any beat
+	# of the bar the outgoing section was on, so it announces the bar that closes: off the grid
+	# being replaced, carrying an index counted from the section being left, ahead of the
+	# landing's own bar. One frame long enough to carry the music past the boundary, which is
+	# what a level load does, is enough to be on such a beat.
+	var player := _detached_player()
+	var narrow := DivisiSection.new()
+	narrow.section_name = &"narrow"
+	narrow.bpm = 120.0
+	narrow.beats_per_bar = 1
+	# assign() rather than a plain write: Godot 4.4 will not assign an Array typed by script
+	# path to one typed by class name, and the parse error that produces is not a test failure,
+	# it is a suite that never runs.
+	narrow.layers.assign(EXPLORE.layers)
+	player.sections = [EXPLORE, COMBAT, narrow] as Array[DivisiSection]
+	for i in range(1, 100):
+		_frame(player, i)
+
+	assert_bool(player.transition_to(&"narrow", DivisiQuantize.NEXT_BAR)).is_true()
+	var announced := _announced
+	_bars.clear()
+
+	# Boundary beat 4 sits at 2.0 s; this frame arrives three and a half beats past it.
+	player.clock.advance_to(3.7)
+	player._process(1.0 / 60.0)
+	player.clock.player = null
+
+	assert_str(String(player.current_section.section_name)).is_equal("narrow")
+	# One bar signal across the landing, the one the transition named.
+	assert_array(_bars).is_equal([announced])
+	assert_int(player.clock.bar_index).is_equal(announced)
+	player.free()

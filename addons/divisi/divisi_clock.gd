@@ -256,6 +256,10 @@ var _last_raw: float = 0.0
 var _wraps: int = 0
 # Length of one loop of the current source, or 0.0 when it does not loop.
 var _loop_length: float = 0.0
+# The beat the most recent bar went out on, or -1 when none has. Recorded rather than worked
+# out from the grid, because a meter written after a beat was emitted moves the grid out from
+# under it and the grid then answers for that beat with a bar line it was never told about.
+var _last_bar_beat: int = -1
 # The beat this clock will not emit past, or -1 for no ceiling. See hold_beats_at().
 var _ceiling_beat: int = -1
 # Wall clock reading at the first tick of this run, for system_clock_offset_seconds.
@@ -289,6 +293,7 @@ func start(loop_length: float = 0.0) -> void:
 	_grid_beat = 0
 	_grid_beat_in_bar = 0
 	_last_beat_at = 0.0
+	_last_bar_beat = -1
 	_last_raw = 0.0
 	_wraps = 0
 	_loop_length = maxf(0.0, loop_length)
@@ -358,21 +363,40 @@ func rebase(
 	# this call does when the boundary is a downbeat on the outgoing grid. Announcing it again
 	# would be a duplicate.
 	#
-	# Asked of the grid rather than of beat_index, because the boundary beat is not always the
-	# last one emitted. A tempo written while the transition was pending can move the boundary
-	# into the past, and then the tick that crosses it emits the boundary beat and the beats
-	# after it together; the downbeat still went out. This is the same test landing_bar() uses
-	# to decide whether the boundary needs a bar of its own, so the bar it announced and the
-	# bar this lands in cannot disagree.
+	# The record of where the last bar actually went out answers first. Reading it off the grid
+	# alone is a claim about the past made against the grid as it stands now, and a meter
+	# written between the boundary beat going out and this call moves the grid out from under
+	# that beat: at a bar of one, where every position is a downbeat, the grid then says a bar
+	# went out for a beat that was never told it was a downbeat, and the rebase stays silent
+	# about a bar nobody has announced.
+	#
+	# The grid still answers where it is the same grid the beat was emitted against, which is
+	# what keeps this the test landing_bar() makes: the boundary beat is not always the last one
+	# emitted, and where several beats crossed together every one of them can carry a bar.
 	var downbeat_already_out := (
 		beat_index >= boundary_beat
-		and posmod(boundary_beat - _grid_beat + _grid_beat_in_bar, beats_per_bar) == 0
+		and (
+			_last_bar_beat == boundary_beat
+			or (
+				boundary_beat >= _grid_beat
+				and posmod(boundary_beat - _grid_beat + _grid_beat_in_bar, beats_per_bar) == 0
+			)
+		)
 	)
 
+	# Writing the tempo and the meter into a running clock is a mid play change: it re-anchors
+	# the beat grid, and where the incoming meter is shorter than the beat of the bar the
+	# outgoing section was on it announces the bar that closes, off the grid this call is
+	# replacing and carrying an index from the section being left. play() and restore_state()
+	# stop the clock over the same two writes for the same reason. The only bar a rebase
+	# announces is the landing's own, below.
+	var was_running := running
+	running = false
 	if new_bpm > 0.0:
 		bpm = new_bpm
 	if new_beats_per_bar > 0:
 		beats_per_bar = new_beats_per_bar
+	running = was_running
 	position = maxf(position, at_position + source_position)
 	_origin = at_position
 	_grid_at = at_position
@@ -401,6 +425,7 @@ func rebase(
 	_last_beat_at = minf(position_of_beat(beat_index), position)
 	if not downbeat_already_out:
 		bar_index += 1
+		_last_bar_beat = boundary_beat
 		bar.emit(bar_index)
 
 
@@ -697,6 +722,7 @@ func advance_to(raw: float) -> void:
 			bar_index += 1
 		beat.emit(beat_index)
 		if downbeat:
+			_last_bar_beat = beat_index
 			bar.emit(bar_index)
 
 
@@ -741,6 +767,7 @@ func _reanchor_running_grid() -> void:
 	_grid_beat_in_bar = beat_in_bar
 	if closes_a_bar:
 		bar_index += 1
+		_last_bar_beat = beat_index
 		bar.emit(bar_index)
 
 
@@ -786,6 +813,10 @@ func _derive_bar_fields() -> void:
 			)
 		)
 		beat_in_bar = reachable_beat_in_bar
+	# A save records the counts, not which beat the last bar went out on. What it does record is
+	# whether the beat it stopped on was a downbeat, and that is the same answer: a restored run
+	# picks up from a beat that either carried a bar or did not.
+	_last_bar_beat = beat_index if beat_index >= 0 and beat_in_bar == 0 else -1
 
 
 # Whether a restored field holds a number at all. A dictionary read off disk can hold anything,
