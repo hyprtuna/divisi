@@ -44,6 +44,17 @@ signal stinger_started
 ## that will never advance again.
 signal playback_finished(section_name: StringName)
 
+## How long the stinger duck takes to come back when nothing else is asked for.
+const DEFAULT_DUCK_RELEASE_SECONDS := 0.25
+
+## The most wall time one frame may hand the stinger duck. The hold and the release are counted
+## off [method Time.get_ticks_usec] so that [member Engine.time_scale] cannot stretch them past
+## the stinger they exist to cover, but a frame that did not run at all, because the scene tree
+## was paused or a window was being dragged, would hand the whole gap over in one step and
+## release the duck under a stinger that has not finished. Longer than any frame a running game
+## produces, and far shorter than a pause.
+const MAX_DUCK_FRAME_SECONDS := 0.25
+
 ## The sections this player can play, looked up by [member DivisiSection.section_name].
 @export var sections: Array[DivisiSection] = []
 
@@ -125,19 +136,22 @@ var _stinger_at: float = 0.0
 var _stinger_pending: bool = false
 # Duck applied to the music while a stinger plays. 0.0 when nothing is ducking.
 var _duck_db: float = 0.0
-# Seconds of the stinger still to run. Counted down in wall seconds, not in musical time: see
-# _advance_duck.
+# Seconds of the stinger still to run. Counted down in wall seconds, not in musical time and
+# not in frame time either: see _advance_duck.
 var _duck_hold_remaining: float = 0.0
-var _duck_release_seconds: float = 0.25
+var _duck_release_seconds: float = DEFAULT_DUCK_RELEASE_SECONDS
 var _duck_release_from_db: float = 0.0
 var _duck_release_elapsed: float = 0.0
+# Wall clock reading at the last _advance_duck, so the hold and the release measure seconds
+# rather than frames.
+var _duck_last_usec: int = 0
 var _ducking: bool = false
 var _duck_releasing: bool = false
 # Requested at schedule time and read at fire time. Kept apart from the active duck above: a
 # second stinger scheduled with no duck used to overwrite the depth of a duck that was already
 # releasing, which left the release rate at zero and the music permanently quiet.
 var _pending_duck_db: float = 0.0
-var _pending_duck_release: float = 0.25
+var _pending_duck_release: float = DEFAULT_DUCK_RELEASE_SECONDS
 # The layers of each slot's section, in mix order, cached so that writing intensity every
 # frame does not rebuild the array every frame.
 var _active_mixed: Array[DivisiLayer] = []
@@ -178,7 +192,7 @@ func _process(delta: float) -> void:
 		return
 	clock.tick()
 	_advance_fade(delta)
-	_advance_duck(delta)
+	_advance_duck()
 	_fire_due_work()
 
 
@@ -290,18 +304,24 @@ func cancel_transition() -> bool:
 ## the boundary replaces the first.
 ##
 ## A duck only ever lowers the music. A positive [param duck_db] is ignored, with a warning,
-## rather than raising it. The dip stops at [constant DivisiClock.SILENCE_DB], the same floor
-## the layer gains use, so a very large one is silence rather than a number the audio server
-## has to make sense of.
+## rather than raising it, and so is one that is not a number at all. The dip stops at
+## [constant DivisiClock.SILENCE_DB], the same floor the layer gains use, so a very large one is
+## silence rather than a number the audio server has to make sense of. A
+## [param release_seconds] that is not a number is refused the same way, and
+## [constant DEFAULT_DUCK_RELEASE_SECONDS] is used instead: a NAN release never reaches zero,
+## so the music would stay down for the rest of the run.
 ##
 ## The duck is held for the length of the stinger and then released, and both are counted in
-## plain seconds rather than in musical time. The stinger has its own player, so pausing the
-## music does not pause it, and a hold measured against a stopped clock would never end.
+## wall seconds: not in musical time, because the stinger has its own player and a hold
+## measured against a stopped clock would never end, and not in frame time either, because
+## [member Engine.time_scale] scales that and does not scale the stinger's audio. Slow motion
+## is exactly when a game fires a stinger, and a duck stretched by it sits over music the
+## stinger has already finished playing under.
 func play_stinger(
 	stream: AudioStream,
 	quantize: DivisiQuantize.Mode = DivisiQuantize.NEXT_BEAT,
 	duck_db: float = 0.0,
-	release_seconds: float = 0.25
+	release_seconds: float = DEFAULT_DUCK_RELEASE_SECONDS
 ) -> bool:
 	if stream == null:
 		push_error("divisi: play_stinger was given no stream.")
@@ -312,18 +332,39 @@ func play_stinger(
 	_stinger_stream = stream
 	_stinger_at = clock.next_boundary(quantize)
 	_stinger_pending = true
-	if duck_db > 0.0:
+	var depth_db := duck_db
+	if not is_finite(depth_db):
+		push_warning(
+			(
+				"divisi: play_stinger was given duck_db %s, which is not a level. Ignoring it."
+				% depth_db
+			)
+		)
+		depth_db = 0.0
+	elif depth_db > 0.0:
 		push_warning(
 			(
 				(
 					"divisi: play_stinger was given duck_db %+f, which would raise the music "
 					+ "rather than duck it. Ignoring it."
 				)
-				% duck_db
+				% depth_db
 			)
 		)
-	_pending_duck_db = clampf(duck_db, DivisiClock.SILENCE_DB, 0.0)
-	_pending_duck_release = maxf(0.0, release_seconds)
+	var release := release_seconds
+	if not is_finite(release):
+		push_warning(
+			(
+				(
+					"divisi: play_stinger was given release_seconds %s, which is not a length "
+					+ "of time. Using %f."
+				)
+				% [release, DEFAULT_DUCK_RELEASE_SECONDS]
+			)
+		)
+		release = DEFAULT_DUCK_RELEASE_SECONDS
+	_pending_duck_db = clampf(depth_db, DivisiClock.SILENCE_DB, 0.0)
+	_pending_duck_release = maxf(0.0, release)
 	return true
 
 
@@ -536,6 +577,7 @@ func _fire_stinger() -> void:
 		_duck_db = _pending_duck_db
 		_duck_release_seconds = _pending_duck_release
 		_duck_hold_remaining = maxf(0.0, length - overshoot)
+		_duck_last_usec = Time.get_ticks_usec()
 		_apply_volumes()
 	stinger_started.emit()
 
@@ -559,16 +601,21 @@ func _end_fade() -> void:
 	_apply_volumes()
 
 
-func _advance_duck(delta: float) -> void:
+func _advance_duck() -> void:
 	if not _ducking:
 		return
+	# Wall seconds, read off the clock rather than taken from the frame. Musical time stops
+	# when the music does, and the stinger plays on its own player, so a hold measured against
+	# a stopped clock never ends: a paused stream used to leave the music 18 dB down for the
+	# whole pause. Frame time has the mirror problem, because Engine.time_scale stretches it
+	# and does not stretch the stinger: at a tenth speed a 1.2 s stinger held its duck for
+	# 13.9 wall seconds. A frame is allowed to contribute at most MAX_DUCK_FRAME_SECONDS, so a
+	# frame that did not run cannot hand the whole gap over at once.
+	var now := Time.get_ticks_usec()
+	var elapsed := minf(float(now - _duck_last_usec) / 1000000.0, MAX_DUCK_FRAME_SECONDS)
+	_duck_last_usec = now
 	if not _duck_releasing:
-		# Counted in the seconds the release ramp below already uses, not in musical time. The
-		# stinger plays on its own player, so pausing the music stops the clock without
-		# stopping the stinger, and a hold measured against a stopped clock never ends: a
-		# paused stream used to leave the music 18 dB down for the whole pause and bring it
-		# back only afterwards.
-		_duck_hold_remaining -= delta
+		_duck_hold_remaining -= elapsed
 		if _duck_hold_remaining > 0.0:
 			return
 		_duck_releasing = true
@@ -581,7 +628,7 @@ func _advance_duck(delta: float) -> void:
 	if _duck_release_seconds <= 0.0:
 		_duck_db = 0.0
 	else:
-		_duck_release_elapsed += delta
+		_duck_release_elapsed += elapsed
 		var t := clampf(_duck_release_elapsed / _duck_release_seconds, 0.0, 1.0)
 		_duck_db = lerpf(_duck_release_from_db, 0.0, t)
 	if is_zero_approx(_duck_db) or _duck_release_seconds <= 0.0:
