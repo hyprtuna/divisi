@@ -42,6 +42,34 @@ func test_an_infinite_tempo_is_refused() -> void:
 	assert_float(_clock.beat_seconds).is_equal_approx(0.5, 0.000001)
 
 
+func test_the_refusal_for_a_meter_that_is_not_a_number_reads_the_same_on_both_legs() -> void:
+	# int(NAN) and int(INF) are both the smallest 64 bit integer, and Godot 4.4's own %d prints
+	# that value with two minus signs. The message read "Refusing --9223372036854775808" on one
+	# leg of the support matrix and "Refusing -9223372036854775808" on the other, and neither is
+	# a number anyone wrote: it is what a meter of NAN or INF became on the way to the setter.
+	# So it is named rather than printed, and the message reads the same wherever it runs.
+	var write_nan := func() -> void: _clock.beats_per_bar = NAN
+	await (assert_error(write_nan).is_push_error(
+		(
+			"divisi: beats_per_bar must be at least 1. Refusing a value that is not a count, "
+			+ "the meter stays 4."
+		)
+	))
+	var write_inf := func() -> void: _clock.beats_per_bar = INF
+	await (assert_error(write_inf).is_push_error(
+		(
+			"divisi: beats_per_bar must be at least 1. Refusing a value that is not a count, "
+			+ "the meter stays 4."
+		)
+	))
+	# A meter somebody really did write is still printed, with the one minus sign it has.
+	var write_negative := func() -> void: _clock.beats_per_bar = -3
+	await (assert_error(write_negative).is_push_error(
+		"divisi: beats_per_bar must be at least 1. Refusing -3, the meter stays 4."
+	))
+	assert_int(_clock.beats_per_bar).is_equal(4)
+
+
 func test_a_meter_that_is_not_a_number_or_is_infinite_is_refused() -> void:
 	# beats_per_bar is an int, so NAN and INF are converted before the setter sees them, and
 	# both arrive as the smallest 64 bit integer. The guard that refuses zero and negative

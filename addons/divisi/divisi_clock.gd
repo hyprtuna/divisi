@@ -60,6 +60,14 @@ const MAX_CATCH_UP_BEATS := 16
 ## millionth of a beat per minute is, one bar line up.
 const MAX_BEATS_PER_BAR := 1024
 
+## What [method @GlobalScope.int] gives for a value that is not a finite number: the smallest
+## 64 bit integer. A meter written as [constant @GDScript.NAN] or [constant @GDScript.INF]
+## arrives at its setter as this, so it is a sentinel for "no count at all" rather than a count
+## anyone meant. It is spelled as a subtraction because the literal it names cannot be written
+## directly: the parser reads a minus sign as negation applied to a number one past the end of
+## the range.
+const NOT_A_COUNT := -9223372036854775807 - 1
+
 ## The largest beat or bar count [method from_dict] will restore. Over four years of unbroken
 ## play at 400 BPM, the fastest tempo the inspector hint suggests, and far enough below the
 ## largest 64 bit integer that the counts can still be advanced past it. Restored at that
@@ -127,10 +135,16 @@ const MAX_RESTORED_COUNT := 1000000000
 @export_range(1, 32, 1, "or_greater") var beats_per_bar: int = 4:
 	set(value):
 		if value <= 0:
+			# Named rather than printed when it is the sentinel, because Godot 4.4's own %d
+			# renders the smallest 64 bit integer with two minus signs, and a refusal message
+			# that misprints the value it refused is worse than one that describes it. There is
+			# nothing to print in that case anyway: nobody wrote that number, it is what a
+			# meter of NAN or INF became on its way here.
+			var refused := "a value that is not a count" if value == NOT_A_COUNT else "%d" % value
 			push_error(
 				(
-					"divisi: beats_per_bar must be at least 1. Refusing %d, the meter stays %d."
-					% [value, beats_per_bar]
+					"divisi: beats_per_bar must be at least 1. Refusing %s, the meter stays %d."
+					% [refused, beats_per_bar]
 				)
 			)
 			return
