@@ -317,6 +317,13 @@ func cancel_transition() -> bool:
 ## [member Engine.time_scale] scales that and does not scale the stinger's audio. Slow motion
 ## is exactly when a game fires a stinger, and a duck stretched by it sits over music the
 ## stinger has already finished playing under.
+##
+## Writing [member AudioStreamPlayer.stream_paused] on the music players yourself is what the
+## first of those covers: it stops the clock and leaves the stinger playing, so a hold measured
+## in musical time would outlast the stinger by the length of the pause. Pausing the whole tree
+## with [member SceneTree.paused] is not that case. Godot pauses every one of these players, so
+## the stinger, the music and the hold stop together and resume together, and nothing is
+## audible in between.
 func play_stinger(
 	stream: AudioStream,
 	quantize: DivisiQuantize.Mode = DivisiQuantize.NEXT_BEAT,

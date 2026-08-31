@@ -35,6 +35,12 @@ signal beat(index: int)
 
 ## Emitted on every downbeat, immediately after the [signal beat] for that downbeat, with a
 ## running index that starts at 0 on [method start].
+##
+## Two things move the bar line onto a beat that has already been emitted: a section change,
+## whose incoming stems begin at their own downbeat, and a meter shrunk to one while the music
+## is between downbeats. Both announce it where it happens rather than holding it back until
+## the next beat, so a downbeat is never read off [member beat_in_bar] without having been
+## announced.
 signal bar(index: int)
 
 ## Volume floor. The engine's own inspector hint for a synchronized stream's volume stops at
@@ -107,6 +113,12 @@ const MAX_RESTORED_COUNT := 1000000000
 ## Writing this while the clock is running re-anchors the bar line the same way [member bpm]
 ## does, so the bar the music is in finishes on the new meter rather than on the old one, and
 ## [method next_boundary] keeps answering with a real downbeat.
+##
+## Shrinking it past the beat of the bar the music is on moves the count to the last beat of
+## the new bar, so that bar ends at the next beat rather than running on to where the old bar
+## line was. Shrinking it to 1 is the one case with nowhere to move to, because every beat of
+## a bar of one is a downbeat: the bar the write closed is announced there and then, with a
+## [signal bar].
 ##
 ## Zero or negative is refused with an error rather than clamped, the same as [member bpm], and
 ## so is anything past [constant MAX_BEATS_PER_BAR]. A meter is an int, so a non-finite value
@@ -664,9 +676,22 @@ func _reanchor_running_grid() -> void:
 	_grid_at = minf(_last_beat_at, position)
 	_grid_beat = beat_index
 	# A meter that just got shorter can leave the beat of the bar past the end of the new bar.
-	# The bar finishes as soon as the new meter allows rather than claiming a downbeat here.
-	beat_in_bar = mini(beat_in_bar, beats_per_bar - 1)
+	# The bar finishes as soon as the new meter allows rather than claiming a downbeat here:
+	# the count moves to the last beat of the new bar, so the next beat is the downbeat.
+	#
+	# A bar of one has no position that is not a downbeat, so there the count cannot avoid
+	# reading as one. Reading 0 on its own would say the beat that has just sounded was a
+	# downbeat when nothing was ever told it was, so the bar the shrink closed is announced
+	# instead, the way rebase() announces the one it re-anchors on. The alternative, leaving
+	# the count past the end of the bar, is the state from_dict() refuses to restore because
+	# playing cannot produce it, and playing should not start producing it here.
+	var shortened := mini(beat_in_bar, beats_per_bar - 1)
+	var closes_a_bar := shortened == 0 and beat_in_bar != 0
+	beat_in_bar = shortened
 	_grid_beat_in_bar = beat_in_bar
+	if closes_a_bar:
+		bar_index += 1
+		bar.emit(bar_index)
 
 
 # The bar fields, checked against the beat count rather than trusted, and derived from it where
