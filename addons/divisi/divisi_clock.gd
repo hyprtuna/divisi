@@ -251,16 +251,26 @@ func stop() -> void:
 ## by more than one beat has already emitted beats past it, and rewinding the counter so they
 ## could be emitted again fired every beat handler twice with a decreasing index.
 ##
+## [param at_beat] is the beat [param at_position] is the position of, as
+## [method next_boundary_beat] returned it when the transition was scheduled. Passing it is
+## what keeps the announced bar and the landed bar the same number: the default, -1, reads the
+## beat back off [param at_position] instead, which is exact but answers against whatever grid
+## is in place by the time the boundary arrives rather than the one that was scheduled against.
+##
 ## Leaves the clock running, whether or not it was running before.
 func rebase(
 	at_position: float,
 	source_position: float,
 	loop_length: float,
 	new_bpm: float = 0.0,
-	new_beats_per_bar: int = 0
+	new_beats_per_bar: int = 0,
+	at_beat: int = -1
 ) -> void:
-	# Read against the outgoing grid, before the tempo changes under it.
-	var boundary_beat := beat_at(at_position)
+	# Read against the outgoing grid, before the tempo changes under it. A caller that
+	# scheduled against [method next_boundary_beat] passes that beat back here, so the bar it
+	# announced then and the bar the music lands in now are the same number even if a tempo
+	# write moved the grid in between. -1 asks for it to be read off at_position instead.
+	var boundary_beat := beat_at(at_position) if at_beat < 0 else at_beat
 	# Whether the tick just before this call announced the boundary as a downbeat, which is
 	# what a NEXT_BAR transition does. If it did, announcing it again is a duplicate.
 	var downbeat_already_out := beat_index == boundary_beat and beat_in_bar == 0
@@ -387,20 +397,40 @@ func tick() -> void:
 	advance_to(compensated_position(player))
 
 
+## The beat index of the next [param quantize] boundary.
+##
+## This is the number to schedule against. [method next_boundary] is this beat turned into a
+## position, and a position is what a scheduler has to compare [member position] against, but
+## the beat is what the bar count is derived from at both ends: announced when the transition
+## is scheduled, and landed on when [method rebase] re-anchors the grid. Carrying it through
+## rather than reading it back off the position is what stops the two disagreeing.
+func next_boundary_beat(quantize: DivisiQuantize.Mode) -> int:
+	if quantize == DivisiQuantize.NOW:
+		return beat_at(position)
+	var n := beat_at(position) - _grid_beat + 1
+	if quantize == DivisiQuantize.NEXT_BAR:
+		# The anchor is a downbeat after start() and rebase(), but not after resync_source() or
+		# a mid play meter change, so the bar line is counted from the beat of the bar the
+		# anchor actually sits on.
+		while posmod(_grid_beat_in_bar + n, beats_per_bar) != 0:
+			n += 1
+	return _grid_beat + n
+
+
 ## The musical position of the next [param quantize] boundary, in the same units as
 ## [member position].
 func next_boundary(quantize: DivisiQuantize.Mode) -> float:
 	if quantize == DivisiQuantize.NOW:
 		return position
-	var beats_since_anchor := (position - _grid_at) / beat_seconds
-	var n := floori(beats_since_anchor) + 1
-	if quantize == DivisiQuantize.NEXT_BAR:
-		# The anchor is a downbeat after start() and rebase(), but not after resync_source() or
-		# a mid play meter change, so the bar line is counted from the beat of the bar the
-		# anchor actually sits on.
-		while (_grid_beat_in_bar + n) % beats_per_bar != 0:
-			n += 1
-	return _grid_at + float(n) * beat_seconds
+	return position_of_beat(next_boundary_beat(quantize))
+
+
+## The musical position beat [param beat] falls on, against the current grid.
+##
+## The inverse of [method beat_at], and the expression [method beat_at] corrects itself
+## against, so a position this returns reads back as the beat it was asked for.
+func position_of_beat(beat: int) -> float:
+	return _grid_at + float(beat - _grid_beat) * beat_seconds
 
 
 ## Seconds from now until the next [param quantize] boundary. 0.0 for
@@ -424,9 +454,24 @@ func landing_bar(musical_position: float) -> int:
 	return bar_index + maxi(0, crossed) + (0 if lands_on_a_downbeat else 1)
 
 
-## The beat index that [param musical_position] falls on, against the current grid.
+## The beat index that [param musical_position] falls on, against the current grid: the last
+## beat whose [method position_of_beat] is at or before it.
+##
+## Dividing the distance from the grid anchor by the beat length answers that, but only up to
+## a rounding error. Building a boundary position out of a beat number and taking it apart
+## again is a round trip through a float, and it loses an ulp: on a grid anchored at 0.0, or at
+## a boundary rebase() had itself produced, it never showed, but a tempo written mid play
+## anchors the grid on an arbitrary position and from there one boundary in five came back as
+## the beat before it. The division is a first guess, out by at most one, and it is corrected
+## against the same expression the position was built with rather than nudged past the error by
+## an epsilon: an epsilon moves where this breaks, it does not stop it breaking.
 func beat_at(musical_position: float) -> int:
-	return _grid_beat + floori((musical_position - _grid_at) / beat_seconds)
+	var beat := _grid_beat + floori((musical_position - _grid_at) / beat_seconds)
+	if position_of_beat(beat + 1) <= musical_position:
+		return beat + 1
+	if position_of_beat(beat) > musical_position:
+		return beat - 1
+	return beat
 
 
 ## Latency compensated playback position of [param from_player], in seconds.
@@ -496,7 +541,7 @@ func advance_to(raw: float) -> void:
 		_wall_start_usec = _last_tick_usec
 		_wall_start_position = position
 
-	var target := _grid_beat + floori((position - _grid_at) / beat_seconds)
+	var target := beat_at(position)
 	if target <= beat_index:
 		return
 
