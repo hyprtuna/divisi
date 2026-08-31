@@ -48,6 +48,19 @@ const SILENCE_DB := -80.0
 ## and only the newest beat is emitted.
 const MAX_CATCH_UP_BEATS := 16
 
+## The longest bar a meter may describe. The inspector hint stops at 32 and this is far past
+## any meter in use, but a bar does have to end: at 120 BPM a bar of a million beats is 5787
+## days, which is the same clock that looks alive and never emits again that a tempo of a
+## millionth of a beat per minute is, one bar line up.
+const MAX_BEATS_PER_BAR := 1024
+
+## The largest beat or bar count [method from_dict] will restore. Over four years of unbroken
+## play at 400 BPM, the fastest tempo the inspector hint suggests, and far enough below the
+## largest 64 bit integer that the counts can still be advanced past it. Restored at that
+## integer they could not be: the next beat overflowed the count, and the clock, having read
+## a beat index that its own arithmetic could never exceed, never emitted again.
+const MAX_RESTORED_COUNT := 1000000000
+
 ## Beats per minute of the stream this clock is following.
 ##
 ## Writing this while the clock is running is a tempo change, and the beat grid re-anchors to
@@ -55,10 +68,22 @@ const MAX_CATCH_UP_BEATS := 16
 ## the write is one beat of the new tempo away, and nothing is emitted twice. The current beat
 ## is cut short, which is what an abrupt tempo change is.
 ##
-## Zero or negative is refused with an error rather than clamped. A clamp to a millionth of a
-## beat per minute is one beat every 694 days: a clock that looks alive and never emits again.
+## Zero, negative, and anything that is not a finite number are refused with an error rather
+## than clamped. A clamp to a millionth of a beat per minute is one beat every 694 days: a
+## clock that looks alive and never emits again. [constant @GDScript.NAN] is worse, because
+## every comparison against it is false, so the next boundary is NAN and a pending transition
+## can never fire; [constant @GDScript.INF], which [code]60.0 / interval[/code] reaches
+## whenever the interval is zero, makes the beat a length of nothing.
 @export_range(1.0, 400.0, 0.01, "or_greater", "suffix:BPM") var bpm: float = 120.0:
 	set(value):
+		if not is_finite(value):
+			push_error(
+				(
+					"divisi: bpm must be a finite number. Refusing %s, the tempo stays %f."
+					% [value, bpm]
+				)
+			)
+			return
 		if value <= 0.0:
 			push_error(
 				(
@@ -78,7 +103,10 @@ const MAX_CATCH_UP_BEATS := 16
 ## does, so the bar the music is in finishes on the new meter rather than on the old one, and
 ## [method next_boundary] keeps answering with a real downbeat.
 ##
-## Zero or negative is refused with an error rather than clamped, the same as [member bpm].
+## Zero or negative is refused with an error rather than clamped, the same as [member bpm], and
+## so is anything past [constant MAX_BEATS_PER_BAR]. A meter is an int, so a non-finite value
+## written here arrives as the smallest 64 bit integer and the first of those guards catches
+## it.
 @export_range(1, 32, 1, "or_greater") var beats_per_bar: int = 4:
 	set(value):
 		if value <= 0:
@@ -86,6 +114,14 @@ const MAX_CATCH_UP_BEATS := 16
 				(
 					"divisi: beats_per_bar must be at least 1. Refusing %d, the meter stays %d."
 					% [value, beats_per_bar]
+				)
+			)
+			return
+		if value > MAX_BEATS_PER_BAR:
+			push_error(
+				(
+					"divisi: beats_per_bar must be at most %d. Refusing %d, the meter stays %d."
+					% [MAX_BEATS_PER_BAR, value, beats_per_bar]
 				)
 			)
 			return
@@ -349,42 +385,62 @@ func to_dict() -> Dictionary:
 ## the surface worth scrutinising: a beat index of -500, or a beat of the bar past the end of
 ## the bar, is a state no amount of playing could reach, and every boundary this clock answers
 ## afterwards is derived from it.
+##
+## A field that does not hold a number of the right kind is refused and the clock keeps what it
+## has. A whole number written as a float is a count, because a JSON save writes every number
+## that way, but 3.9 is not, and neither is [code]true[/code] or the string "7": those used to
+## arrive as 3, 1.0 BPM and 7 with nothing said. A number that is finite but outside the range
+## playing reaches is clamped, or, where the clock already holds a good value from its section,
+## refused in favour of that.
+##
+## [member bar_index] and [member beat_in_bar] are not restored blind. They are not free
+## numbers: a bar is announced with a beat, so there cannot be more bars than beats, and the
+## beat of the bar cannot sit past the end of the bar. Where the dictionary breaks that, they
+## are derived from [member beat_index] and [member beats_per_bar] instead, so a bar count no
+## run of that many beats could have reached cannot be represented at all.
 func from_dict(state: Dictionary) -> void:
 	if state.has("bpm"):
-		var restored_bpm := float(state["bpm"])
-		if restored_bpm > 0.0:
-			bpm = restored_bpm
-		else:
+		var restored_bpm: Variant = state["bpm"]
+		if not _is_number(restored_bpm):
 			push_warning(
 				(
-					"divisi: restored state has bpm %f, which is not a tempo. Keeping %f."
+					"divisi: restored state has bpm %s, which is not a number. Keeping %f."
 					% [restored_bpm, bpm]
 				)
 			)
-	if state.has("beats_per_bar"):
-		var restored_beats := int(state["beats_per_bar"])
-		if restored_beats > 0:
-			beats_per_bar = restored_beats
-		else:
+		elif not is_finite(float(restored_bpm)) or float(restored_bpm) <= 0.0:
 			push_warning(
 				(
-					"divisi: restored state has beats_per_bar %d, which is not a bar. Keeping %d."
+					"divisi: restored state has bpm %s, which is not a tempo. Keeping %f."
+					% [restored_bpm, bpm]
+				)
+			)
+		else:
+			bpm = float(restored_bpm)
+	if state.has("beats_per_bar"):
+		var restored_beats: Variant = state["beats_per_bar"]
+		if not _is_whole_number(restored_beats):
+			push_warning(
+				(
+					"divisi: restored state has beats_per_bar %s, which is not a count. Keeping %d."
 					% [restored_beats, beats_per_bar]
 				)
 			)
-	position = _restored_float(state, "position", position, 0.0)
-	beat_index = _restored_int(state, "beat_index", beat_index, -1)
-	bar_index = _restored_int(state, "bar_index", bar_index, -1)
-	beat_in_bar = _restored_int(state, "beat_in_bar", beat_in_bar, -1)
-	skipped_beats = _restored_int(state, "skipped_beats", skipped_beats, 0)
-	if beat_in_bar >= beats_per_bar:
-		push_warning(
-			(
-				"divisi: restored state has beat_in_bar %d, past the end of a bar of %d. Clamping."
-				% [beat_in_bar, beats_per_bar]
+		elif int(restored_beats) < 1 or int(restored_beats) > MAX_BEATS_PER_BAR:
+			push_warning(
+				(
+					"divisi: restored state has beats_per_bar %s, which is not a bar. Keeping %d."
+					% [restored_beats, beats_per_bar]
+				)
 			)
-		)
-		beat_in_bar = beats_per_bar - 1
+		else:
+			beats_per_bar = int(restored_beats)
+	position = _restored_float(state, "position", position, 0.0)
+	beat_index = _restored_int(state, "beat_index", beat_index, -1, MAX_RESTORED_COUNT)
+	bar_index = _restored_int(state, "bar_index", bar_index, -1, MAX_RESTORED_COUNT)
+	beat_in_bar = _restored_int(state, "beat_in_bar", beat_in_bar, -1, MAX_RESTORED_COUNT)
+	skipped_beats = _restored_int(state, "skipped_beats", skipped_beats, 0, MAX_RESTORED_COUNT)
+	_derive_bar_fields()
 
 
 ## Reads the audio device, advances [member position] and emits any beats and bars that were
@@ -591,35 +647,131 @@ func _reanchor_running_grid() -> void:
 	_grid_beat_in_bar = beat_in_bar
 
 
-# One restored integer count, refused below the lowest value that playing can produce. The
-# field is named in the warning because the caller is a game handing divisi a dictionary it may
-# have read off disk, and "the clock is wrong" is not something anyone can act on.
-static func _restored_int(state: Dictionary, key: String, current: int, lowest: int) -> int:
+# The bar fields, checked against the beat count rather than trusted, and derived from it where
+# they do not fit. What is derived is the state a run of this many beats in this meter reaches
+# from start(), which is the only answer available once the saved one has been shown to be
+# impossible.
+func _derive_bar_fields() -> void:
+	# Before the first beat, start() leaves the count one short of the first downbeat and no
+	# bar announced, and that is the only state a clock can be in there.
+	var reachable_bar := -1
+	var reachable_beat_in_bar := beats_per_bar - 1
+	var bar_fits := bar_index == -1
+	# Two values mean no beat has been emitted yet: the -1 a clock carries before start() is
+	# called at all, and the one short of a downbeat that start() itself leaves.
+	var beat_in_bar_fits := beat_in_bar == -1 or beat_in_bar == beats_per_bar - 1
+	if beat_index >= 0:
+		reachable_bar = beat_index / beats_per_bar
+		reachable_beat_in_bar = beat_index % beats_per_bar
+		bar_fits = bar_index >= 0 and bar_index <= beat_index
+		beat_in_bar_fits = (
+			beat_in_bar >= 0 and beat_in_bar < beats_per_bar and beat_in_bar <= beat_index
+		)
+	if not bar_fits:
+		push_warning(
+			(
+				(
+					"divisi: restored state has bar_index %d, which %d beats in a bar of %d cannot "
+					+ "have announced. Using %d."
+				)
+				% [bar_index, beat_index + 1, beats_per_bar, reachable_bar]
+			)
+		)
+		bar_index = reachable_bar
+	if not beat_in_bar_fits:
+		push_warning(
+			(
+				(
+					"divisi: restored state has beat_in_bar %d, which is not where beat %d of a bar "
+					+ "of %d falls. Using %d."
+				)
+				% [beat_in_bar, beat_index, beats_per_bar, reachable_beat_in_bar]
+			)
+		)
+		beat_in_bar = reachable_beat_in_bar
+
+
+# Whether a restored field holds a number at all. A dictionary read off disk can hold anything,
+# and float() reads true as 1.0 while int() parses a string, so without this a save that never
+# held a tempo restored as a tempo of one beat a minute with nothing said.
+static func _is_number(value: Variant) -> bool:
+	return typeof(value) == TYPE_INT or typeof(value) == TYPE_FLOAT
+
+
+# Whether a restored field holds a count. Every number in a JSON save comes back as a float, so
+# a float that is a whole number is one; 3.9 is not, and neither is a non-finite one.
+static func _is_whole_number(value: Variant) -> bool:
+	if typeof(value) == TYPE_INT:
+		return true
+	if typeof(value) != TYPE_FLOAT:
+		return false
+	var number := float(value)
+	return is_finite(number) and is_equal_approx(number, floorf(number))
+
+
+# One restored integer count, refused when the field does not hold one and clamped to the range
+# playing can produce when it does. The field is named in every warning because the caller is a
+# game handing divisi a dictionary it may have read off disk, and "the clock is wrong" is not
+# something anyone can act on.
+#
+# The range is compared before the conversion to an int, not after: a float far past the
+# largest 64 bit integer converts to the smallest one, which would clamp a count that was much
+# too high to the lowest value playing starts from.
+static func _restored_int(
+	state: Dictionary, key: String, current: int, lowest: int, highest: int
+) -> int:
 	if not state.has(key):
 		return current
-	var value := int(state[key])
-	if value >= lowest:
-		return value
-	push_warning(
-		(
-			"divisi: restored state has %s %d, below the %d that playing starts from. Clamping."
-			% [key, value, lowest]
+	var value: Variant = state[key]
+	if not _is_whole_number(value):
+		push_warning(
+			(
+				"divisi: restored state has %s %s, which is not a count. Keeping %d."
+				% [key, value, current]
+			)
 		)
-	)
-	return lowest
+		return current
+	var number := float(value)
+	if number < float(lowest):
+		push_warning(
+			(
+				"divisi: restored state has %s %s, below the %d that playing starts from. Clamping."
+				% [key, value, lowest]
+			)
+		)
+		return lowest
+	if number > float(highest):
+		push_warning(
+			(
+				"divisi: restored state has %s %s, past the %d that playing can reach. Clamping."
+				% [key, value, highest]
+			)
+		)
+		return highest
+	return int(value)
 
 
-# The same, for a count that is measured in seconds.
+# The same, for a count that is measured in seconds. A non-finite one is refused rather than
+# clamped: there is no nearest number of seconds to infinity.
 static func _restored_float(state: Dictionary, key: String, current: float, lowest: float) -> float:
 	if not state.has(key):
 		return current
-	var value := float(state[key])
-	if value >= lowest:
-		return value
+	var value: Variant = state[key]
+	if not _is_number(value) or not is_finite(float(value)):
+		push_warning(
+			(
+				"divisi: restored state has %s %s, which is not a number of seconds. Keeping it."
+				% [key, value]
+			)
+		)
+		return current
+	var seconds := float(value)
+	if seconds >= lowest:
+		return seconds
 	push_warning(
 		(
 			"divisi: restored state has %s %f, below the %f that playing starts from. Clamping."
-			% [key, value, lowest]
+			% [key, seconds, lowest]
 		)
 	)
 	return lowest
