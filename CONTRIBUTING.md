@@ -58,6 +58,29 @@ Exit codes: `0` all tests passed, `100` the run ended in test failures, `101`
 warnings only. Both failure codes are non-zero, so a failing run fails the
 gate without any extra handling.
 
+## Keep suite files small
+
+gdUnit4 6.x abandons a suite file at its first failure. Every case after the red
+one in that file is never run and never reported, so one broken assertion hides
+however many real failures come after it, and the summary counts down from a
+smaller total than the file actually holds. gdUnit4 5.x, which the Godot 4.4 leg
+pins, runs the whole file, so the two legs can report different totals for the
+same red change. Checked on both:
+
+```
+carry removed, divisi_player_crossfade_test.gd
+  Godot 4.7.2 / gdUnit4 6.2.1: 1 test case  | 1 failures   (second case never ran)
+  Godot 4.4.1 / gdUnit4 5.1.1: 2 tests cases | 3 failures
+```
+
+So split suites by subject rather than by class, and keep each file to a dozen
+or so cases. The linter agrees for its own reasons: `gdlint` caps a class at
+twenty public methods, which a suite file reaches at about eighteen cases.
+
+There is a second reason to care. Showing that a new test really fails without
+the change it guards means running that test on its own, and a file that abandons
+itself early cannot show you the case you wanted to see.
+
 ## The gate
 
 CI runs one job named `gate`, which requires a green result across the whole
