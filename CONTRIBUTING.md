@@ -42,13 +42,21 @@ silently reports zero tests instead of running any.
 
 ```sh
 godot --headless --path . --import --quit-after 1
-export GODOT_BIN="$(command -v godot)"
-./addons/gdUnit4/runtest.sh -a test
+godot --headless --path . -d --remote-debug tcp://127.0.0.1:0 \
+  -s res://addons/gdUnit4/bin/GdUnitCmdTool.gd -a test --ignoreHeadlessMode
 ```
 
-`runtest.sh`'s exit codes: `0` all tests passed, `100` the run ended in test
-failures, `101` the run ended in warnings only. Both are non-zero, so a
-failing or warning run fails without any extra handling.
+That is not `runtest.sh`, deliberately. `runtest.sh` does not pass
+`--headless`, so on a machine with no display Godot cannot create a
+DisplayServer and dies before any test runs. The command above is what
+`runtest.sh` builds, with `--headless` added, plus `--ignoreHeadlessMode`,
+because gdUnit4 refuses to start under a headless display server unless it is
+told that is deliberate. If you have a display, `./addons/gdUnit4/runtest.sh
+-a test` works too, with `GODOT_BIN` exported.
+
+Exit codes: `0` all tests passed, `100` the run ended in test failures, `101`
+warnings only. Both failure codes are non-zero, so a failing run fails the
+gate without any extra handling.
 
 ## The gate
 
@@ -59,7 +67,8 @@ ones worth running yourself before you push:
 ```sh
 gdformat --check $(git ls-files '*.gd')
 gdlint $(git ls-files '*.gd')
-./addons/gdUnit4/runtest.sh -a test
+godot --headless --path . -d --remote-debug tcp://127.0.0.1:0 \
+  -s res://addons/gdUnit4/bin/GdUnitCmdTool.gd -a test --ignoreHeadlessMode
 git grep -nPI '\x{2014}|\x{2013}' -- .  # must find nothing
 ```
 
