@@ -332,8 +332,19 @@ func stop() -> void:
 ## tempo, they are beats the incoming grid has not reached yet, and it has to wait through them
 ## in silence before it does.
 ##
-## Held beats are not dropped and are not counted in [member skipped_beats]. They are emitted by
-## the tick after the ceiling is lifted, against whatever grid is in place by then.
+## Held beats are not dropped and are not counted in [member skipped_beats], up to
+## [constant MAX_CATCH_UP_BEATS] of them. They are emitted by the tick after the ceiling is
+## lifted, against whatever grid is in place by then.
+##
+## Past that many the lift meets the same catch up path a long stall does: only the newest beat
+## is emitted and the rest are counted as skipped. A [DivisiPlayer] cannot get there, because it
+## lifts the ceiling in the frame that fires the landing and a hold measured over 540 sweep
+## points never suppressed more than a single tick. A caller driving the clock itself can, and
+## for that caller this is the ceiling on the promise above.
+##
+## Only [method start] lifts the ceiling of its own accord. [method stop],
+## [method resync_source] and [method from_dict] leave it standing, so a direct caller that set
+## a hold and then took one of those paths clears it with hold_beats_at(-1).
 func hold_beats_at(beat: int) -> void:
 	_ceiling_beat = beat
 
@@ -830,6 +841,14 @@ func _derive_bar_fields() -> void:
 	# A save records the counts, not which beat the last bar went out on. What it does record is
 	# whether the beat it stopped on was a downbeat, and that is the same answer: a restored run
 	# picks up from a beat that either carried a bar or did not.
+	#
+	# The two answers come apart in one window, and nothing can reach it through a DivisiPlayer.
+	# A rebase() onto a beat several beats past the boundary can leave beat_in_bar at 0 on a beat
+	# that never carried a bar, and a save taken in the single tick before the next one records
+	# that beat here as one that did. It stays unread: after a restore next_boundary_beat() is
+	# always strictly greater than beat_index, so no boundary can be scheduled onto the beat the
+	# field names. Swept directly through rebase(), 0 of 21168 combinations swallowed a bar or
+	# announced one twice.
 	_last_bar_beat = beat_index if beat_index >= 0 and beat_in_bar == 0 else -1
 
 

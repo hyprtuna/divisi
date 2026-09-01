@@ -314,7 +314,11 @@ func cancel_transition() -> bool:
 	if pending_section == null:
 		return false
 	pending_section = null
-	clock.hold_beats_at(-1)
+	# Guarded the way _cancel_pending() guards it. Only a caller that has nulled the public
+	# clock reaches the difference, and that already fails in _process(), but the two paths
+	# that lift a hold should not disagree about whether there is a clock to lift it on.
+	if clock != null:
+		clock.hold_beats_at(-1)
 	return true
 
 
