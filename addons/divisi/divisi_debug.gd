@@ -54,7 +54,14 @@ func _ready() -> void:
 	_label.bbcode_enabled = true
 	_label.fit_content = true
 	_label.scroll_active = false
-	_label.custom_minimum_size = Vector2(300, 0)
+	# The panel is sized by the label, and the label by the longest line in it. There used to
+	# be a 300 px minimum here instead, which is not a width the readout can be held to: the
+	# demo's own "bar:beat" line measures 295 px, so bar 10 wrapped it twenty seconds in, and
+	# so did a meter of 10, a tempo of 1000, or a game whose theme sets a font one point
+	# larger. Wrapping off makes the line the label's minimum width rather than its budget,
+	# and fit_content hands that width to the panel, so the box follows the text wherever it
+	# lands. A bigger fixed number would only move the reading that overflows it.
+	_label.autowrap_mode = TextServer.AUTOWRAP_OFF
 	_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_panel.add_child(_label)
 	add_child(_panel)
