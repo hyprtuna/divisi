@@ -16,7 +16,7 @@ layer volumes.
 ![The divisi demo: a threat slider morphing four stems, then a bar quantized transition to a second section](docs/demo.gif)
 
 The clip is the first fifteen seconds, silent because it is a GIF. The same
-thirty nine seconds [with sound](docs/demo.webm) runs through everything below.
+thirty eight seconds [with sound](docs/demo.webm) runs through everything below.
 
 The repository is itself a Godot project: clone it, open it in Godot 4.4 or
 newer, press play. The demo screen shows, in this order:
