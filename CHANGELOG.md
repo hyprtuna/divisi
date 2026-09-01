@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-09-01
+
+A polish round. Nothing here changes what the clock or the player does: it is
+one cosmetic fix in the debug overlay, the media that had been showing the
+defect, and three places where the code did something the documentation did
+not say.
+
+### Fixed
+
+- **The debug readout fits its panel at every reading.** `DivisiDebug` held its
+  label at a fixed 300 px. The demo's own `bar:beat` line measures 295 px at
+  the default font, so it fit by five pixels and any reading one character
+  wider folded onto a second line: a bar index of 10 or more, which the demo
+  reaches twenty seconds in, a meter of 10 or more, a tempo of 1000 or more, or
+  a project whose theme sets `default_font_size` to 17. Window size never came
+  into it; the panel is min sized under `canvas_items` stretch and measured
+  identical from 1920x1080 down to 480x270. The label no longer wraps, which
+  makes its longest line its minimum width rather than its budget, and the
+  panel follows the text wherever it lands.
+
+### Documentation
+
+- **`DivisiClock.hold_beats_at()` says where its promise stops.** Held beats
+  are not dropped and not counted in `skipped_beats` up to
+  `MAX_CATCH_UP_BEATS` of them, and not past it: a hold of 17 beats emits one
+  and counts 16 as skipped, because the lift meets the same catch up path a
+  long stall does. A `DivisiPlayer` never gets there, and the docstring now
+  says so along with the fact that only `start()` lifts the ceiling on its own.
+
+- **The demo media is re-rendered on the fixed overlay.** `docs/demo.webm` had
+  the wrap in it from about twenty seconds to the end of the clip. All three
+  files are re-rendered, and every frame of the new capture was measured rather
+  than sampled. The README's description of the clip's length now matches it.
+
+- `_derive_bar_fields()` records the one window where reading `beat_in_bar == 0`
+  as "this beat carried a bar" comes apart, and why nothing can reach it
+  through a `DivisiPlayer`.
+
+- `cancel_transition()` guards its `clock` dereference the way
+  `_cancel_pending()` already did.
+
 ## [0.1.4] - 2026-09-01
 
 The round that closes what 0.1.3 left open. Everything here is a beat or bar
@@ -366,7 +407,8 @@ the scheduling that clock makes possible.
   gdUnit4 headless tests on both supported Godot versions, and a check that
   no em or en dash appears anywhere in the repository.
 
-[Unreleased]: https://github.com/hyprtuna/divisi/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/hyprtuna/divisi/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/hyprtuna/divisi/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/hyprtuna/divisi/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/hyprtuna/divisi/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/hyprtuna/divisi/compare/v0.1.1...v0.1.2
